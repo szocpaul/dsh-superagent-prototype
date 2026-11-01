@@ -487,6 +487,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/smoke.spec.ts` | The disposable fixture's check, which the smoke's verification reruns against the exact revision |
 | `tests/prime-plan-paths.spec.ts` | The writable scope a plan proposes: the source tree rather than the documentation tree |
 | `tests/prime-allowlist.spec.ts` | The approver allowlist: the agent's own account is never among the accounts that may approve |
+| `tests/prime-run-request.spec.ts` | The run request: the repository the manifest names, and the approval that follows on the same repository |
 
 ## Persistence
 

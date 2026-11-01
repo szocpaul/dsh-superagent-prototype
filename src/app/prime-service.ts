@@ -85,6 +85,19 @@ export function gitManifestSource(commands: Commands, root: string, revision?: s
   }
 }
 
+/** The repository metadata the manifest and the approval evidence must name alike. */
+const RepositoryRow = z.object({ id: z.number().int().positive() })
+
+/**
+ * The numeric id of the configured repository.
+ *
+ * The manifest names the repository it runs against, and an approval comment is bound to the same repository, so both
+ * read one id from GitHub instead of carrying a placeholder that names no repository at all.
+ */
+async function repositoryId(commands: Commands): Promise<number> {
+  return (await commands.api(RepositoryRow, '')).id
+}
+
 /** The adapters the coordinator drives. */
 export interface PrimeAdapters {
   preflightHost(): PreflightHost
@@ -172,7 +185,7 @@ export async function requestRun(deps: PrimeServiceDeps, ticketId: string, featu
   const { store } = deps
   const commands = deps.commands()
   const source = gitManifestSource(commands, deps.repositoryRoot())
-  const repository = { id: 0, fullName: deps.deployment().repository }
+  const repository = { id: await repositoryId(commands), fullName: deps.deployment().repository }
   const manifest = await buildManifest(source, {
     repository,
     featureDir,
@@ -478,6 +491,8 @@ export async function conversation(deps: PrimeServiceDeps, ticketId: string): Pr
 /** The approval source of one Ticket: its comments, the current allowlist, and the current policy. */
 function approvalSource(deps: PrimeServiceDeps, ticketId: string): ApprovalSource {
   const number = issueNumber(deps, ticketId)
+  let repository: Promise<number> | undefined
+  const repoId = () => repository ??= repositoryId(deps.commands())
   return {
     allowlist: () => allowlistOf(deps.settings(), deps.deployment().github.login),
     policyVersion: () => policyVersion(deps.settings()),
@@ -489,7 +504,7 @@ function approvalSource(deps: PrimeServiceDeps, ticketId: string): ApprovalSourc
         commentId: String(row.id),
         commentBody: row.body ?? '',
         actor: { id: row.user.id ?? 0, login: row.user.login, type: accountType(row.user.type) },
-        repoId: 0,
+        repoId: await repoId(),
         at: row.updated_at ?? row.created_at ?? '',
       }
     },
