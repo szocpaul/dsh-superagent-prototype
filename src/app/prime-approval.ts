@@ -57,6 +57,8 @@ export interface ApprovalStore {
   save(record: ApprovalRecord): void
   /** Reads one approval record by its ID. */
   get(approvalId: string): ApprovalRecord | undefined
+  /** Reads the approval records of one ticket, oldest first. */
+  byTicket(ticketId: string): ApprovalRecord[]
 }
 
 /** What a human approves: one exact manifest of one Ticket. */
@@ -153,6 +155,10 @@ export async function approveRun(source: ApprovalSource, request: RunApprovalReq
     throw new ApprovalError(`The approval comment belongs to another repository than the approved manifest`)
   if (source.policyVersion() !== request.policyVersion)
     throw new ApprovalError(`The policy version changed from ${request.policyVersion} to ${source.policyVersion()}`)
+  // The decision of this comment is already recorded, so a repeated poll answers with it instead of recording it again.
+  const recorded = store?.byTicket(request.ticketId)
+    .find(item => item.manifestSha256 === digest && item.commentId === evidence.commentId && item.decision === 'approved')
+  if (recorded) return recorded
   const record: ApprovalRecord = {
     approvalId: randomUUID(),
     kind: 'run',
@@ -168,6 +174,50 @@ export async function approveRun(source: ApprovalSource, request: RunApprovalReq
     at: evidence.at,
     environmentApproved: true,
     decision: 'approved',
+  }
+  store?.save(record)
+  return record
+}
+
+/**
+ * Records the human's refusal of one exact manifest. The evidence is checked exactly as an approval's is: the comment
+ * is re-read from the source, the actor must be a currently allowlisted human, the comment must still carry the exact
+ * refusal of that digest, the refused manifest must still be the manifest of the Ticket, and the policy version must not
+ * have changed. The record denies the run, so it never authorizes one; it tells a waiting run that the human has
+ * answered and said no.
+ * @returns The denied record, or undefined when the comment is not a refusal by an allowlisted human of this manifest.
+ */
+export async function denyRun(source: ApprovalSource, request: RunApprovalRequest, store?: ApprovalStore): Promise<ApprovalRecord | undefined> {
+  const manifest = source.manifest(request.ticketId)
+  if (!manifest) return undefined
+  const digest = manifestDigest(manifest)
+  if (digest !== request.manifestSha256) return undefined
+  const evidence = await source.fetchComment(request.commentId)
+  if (!evidence || evidence.actor.type !== 'User') return undefined
+  if (!source.allowlist().includes(evidence.actor.login)) return undefined
+  const decision = decisionOf(evidence.commentBody)
+  if (decision?.decision !== 'denied' || decision.manifestSha256 !== request.manifestSha256) return undefined
+  if (evidence.repoId !== manifest.repository.id) return undefined
+  if (source.policyVersion() !== request.policyVersion) return undefined
+  // The decision of this comment is already recorded, so a repeated poll answers with it instead of recording it again.
+  const recorded = store?.byTicket(request.ticketId)
+    .find(item => item.manifestSha256 === digest && item.commentId === evidence.commentId && item.decision === 'denied')
+  if (recorded) return recorded
+  const record: ApprovalRecord = {
+    approvalId: randomUUID(),
+    kind: 'run',
+    manifestId: digest,
+    manifestSha256: digest,
+    ticketId: request.ticketId,
+    triggerId: request.triggerId,
+    policyVersion: source.policyVersion(),
+    repositoryId: manifest.repository.id,
+    commentId: evidence.commentId,
+    commentSha256: bytesDigest(evidence.commentBody),
+    actor: actorOf(evidence),
+    at: evidence.at,
+    environmentApproved: false,
+    decision: 'denied',
   }
   store?.save(record)
   return record

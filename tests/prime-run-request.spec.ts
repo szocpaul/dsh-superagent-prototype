@@ -118,6 +118,11 @@ describe('the run request of a Prime run', () => {
       expect(record?.decision).toBe('approved')
       expect(record?.repositoryId).toBe(REPOSITORY_ID)
 
+      // The poll that follows the same decision answers with it instead of recording it again.
+      const again = await findRunApproval(approval, 'ticket-1', digest)
+      expect(again?.approvalId).toBe(record?.approvalId)
+      expect(store.bridge.approvals.byTicket('ticket-1')).toHaveLength(1)
+
       repository.id = REPOSITORY_ID + 1
       const other = dependencies(root, store, comments(digest), repository)
       expect(await findRunApproval(other, 'ticket-1', digest)).toBeUndefined()

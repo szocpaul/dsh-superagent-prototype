@@ -58,6 +58,7 @@ const store = () => {
   const value: ApprovalStore = {
     save: record => { saved.push(record) },
     get: id => saved.find(record => record.approvalId === id),
+    byTicket: ticketId => saved.filter(record => record.ticketId === ticketId),
   }
   return { value, saved }
 }

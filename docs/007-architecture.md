@@ -488,6 +488,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/prime-plan-paths.spec.ts` | The writable scope a plan proposes: the source tree rather than the documentation tree |
 | `tests/prime-allowlist.spec.ts` | The approver allowlist: the agent's own account is never among the accounts that may approve |
 | `tests/prime-run-request.spec.ts` | The run request: the repository the manifest names, and the approval that follows on the same repository |
+| `tests/prime-approval-wait.spec.ts` | The approval of a run: the effect that waits for the human decision, the run that starts on it, and the refusal that reserves nothing |
 
 ## Persistence
 

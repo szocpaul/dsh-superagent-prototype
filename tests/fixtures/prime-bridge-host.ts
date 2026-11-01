@@ -9,7 +9,7 @@ import { Effects } from '../../src/app/effects.ts'
 import { Store } from '../../src/app/store.ts'
 import { HealthBoard } from '../../src/infra/health.ts'
 import { PrimeBridge } from '../../src/executor/prime-bridge.ts'
-import type { ApprovedManifest, BridgeSegment, RunnerReport, VerificationResult } from '../../src/executor/prime-model.ts'
+import type { ApprovalRecord, ApprovedManifest, BridgeSegment, RunnerReport, VerificationResult } from '../../src/executor/prime-model.ts'
 
 /** The approved manifest the fake host serves. */
 export const manifest = (): ApprovedManifest => ({
@@ -95,6 +95,8 @@ export interface HarnessOptions {
   reconcile?: () => { running: boolean; stop: 'stopped' | 'unconfirmed' | 'unknown'; report?: RunnerReport } | Promise<{ running: boolean; stop: 'stopped' | 'unconfirmed' | 'unknown'; report?: RunnerReport }>
   /** The approval port; it may record a stop while it revalidates. */
   revalidate?: (host: Harness) => Promise<void>
+  /** The run approval the fake approval port reports; without it, the human has not answered yet. */
+  runApproval?: () => ApprovalRecord | undefined
   /** The verification port; it may record a stop while it verifies. */
   verify?: (host: Harness) => Promise<{ runner: RunnerReport; verification: VerificationResult }>
   /** The delivery port; it may record a stop while it delivers. */
@@ -119,6 +121,8 @@ export const harness = (options: HarnessOptions = {}): Harness => {
     approval: {
       revalidate: async () => { await options.revalidate?.(state.harness) },
       gateDecision: async () => undefined,
+      findRunApproval: async () => options.runApproval?.(),
+      findGateApproval: async () => undefined,
     },
     preflight: { run: async () => ({ ok: true, failures: [] }) },
     runner: {

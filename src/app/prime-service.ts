@@ -19,7 +19,7 @@ import { QuotaMonitor, type GuardIdentity } from '../executor/prime-quota.ts'
 import { buildManifest, manifestDigest, type ManifestSource } from '../executor/prime-manifest.ts'
 import { buildLaunchInvocation, AUTONOMOUS_FLAGS } from '../executor/prime-launch.ts'
 import { preflight, type PreflightHost } from '../executor/prime-preflight.ts'
-import { approvalEvidence, approvalIsCurrent, approveRun, verifyGateCommit, verifyGateDecision, type AccountType,
+import { approvalEvidence, approvalIsCurrent, approveRun, denyRun, verifyGateCommit, verifyGateDecision, type AccountType,
   type ApprovalEvidence, type ApprovalSource } from './prime-approval.ts'
 import { readCommit } from '../sources/github-read.ts'
 import { policyVersion } from '../policy.ts'
@@ -513,8 +513,9 @@ function approvalSource(deps: PrimeServiceDeps, ticketId: string): ApprovalSourc
 }
 
 /**
- * Finds the run approval of a Ticket in its original conversation and records it.
- * @returns The recorded approval, or undefined when no currently allowlisted human approved that exact manifest.
+ * Finds the run approval of a Ticket in its original conversation and records it. A refusal of the same manifest by an
+ * allowlisted human is recorded as a denial.
+ * @returns The recorded approval or denial, or undefined when no currently allowlisted human answered that exact manifest.
  */
 export async function findRunApproval(deps: PrimeServiceDeps, ticketId: string, manifestSha256: string): Promise<ApprovalRecord | undefined> {
   const ticket = deps.store.tickets.get(ticketId)
@@ -524,14 +525,22 @@ export async function findRunApproval(deps: PrimeServiceDeps, ticketId: string, 
   for (const comment of comments) {
     const command = RUN_COMMAND.exec(comment.body.trim())
     if (!command || command[3] !== manifestSha256) continue
+    const request = {
+      ticketId,
+      triggerId: ticket.origin.triggerId,
+      commentId: comment.id,
+      manifestSha256,
+      policyVersion: policyVersion(deps.settings()),
+    }
+    if (command[2] === 'DENY') {
+      // The human refused this manifest; the refusal is recorded so a waiting run stops instead of waiting for an
+      // approval that will never come.
+      const denial = await denyRun(source, request, deps.store.bridge.approvals)
+      if (denial) return denial
+      continue
+    }
     try {
-      return await approveRun(source, {
-        ticketId,
-        triggerId: ticket.origin.triggerId,
-        commentId: comment.id,
-        manifestSha256,
-        policyVersion: policyVersion(deps.settings()),
-      }, deps.store.bridge.approvals)
+      return await approveRun(source, request, deps.store.bridge.approvals)
     } catch (error) {
       // A refused comment is not a decision; the next candidate may be one.
       void error

@@ -13,7 +13,7 @@ import { gateDecisionRequest, gateQuestion, nextSegment } from './prime-gate.ts'
 import { noticeText } from './prime-report.ts'
 import { decideRecovery, stopFence } from './prime-recovery.ts'
 import type { TaskLine } from './prime-tasks.ts'
-import type { Effects } from '../app/effects.ts'
+import { Later, type Effects } from '../app/effects.ts'
 import type { Store } from '../app/store.ts'
 
 /** What the coordinator needs from the approval protocol. */
@@ -147,7 +147,12 @@ export class PrimeBridge {
     effects.handle('prime-reconcile', (_payload, key) => this.reconcile(key).then(() => {}), { limit: () => 1, retry: [5000, 300_000] })
     effects.handle('prime-deliver', (_payload, key) => this.deliver(key).then(() => {}), { limit: () => 1, retry: [5000, 300_000] })
     effects.handle('prime-quota', (_payload, key) => this.quota(key).then(() => {}), { limit: () => 1, retry: [5000, 300_000] })
-    effects.handle('prime-approval', (payload, key) => this.approval(payload, key).then(() => {}), { limit: () => 1, retry: [5000, 300_000] })
+    // The human decision is not recorded yet, so the effect waits for it instead of completing: a manifest the operator
+    // was asked to approve must still start the run when the operator answers, however long that takes.
+    effects.handle('prime-approval', async (payload, key) => {
+      if (await this.approval(payload, key)) return
+      throw new Later('The human decision is not recorded yet')
+    }, { limit: () => 1, retry: [15_000, 300_000] })
   }
 
   /**
@@ -164,16 +169,24 @@ export class PrimeBridge {
    * @returns Whether the approval was found; the effect retries while it was not.
    */
   async awaitApproval(ticketId: string): Promise<boolean> {
-    const { store, approval } = this.host
+    const { store, approval, tickets } = this.host
     const manifest = this.host.manifest(ticketId)
-    if (!manifest) return false
+    if (!manifest) {
+      tickets.report(ticketId, { state: 'blocked', summary: 'The approved manifest of the run is missing' })
+      return true
+    }
     if (store.bridge.segments.byTicket(ticketId).some(segment => segment.phase !== 'blocked')) return true
     const record = await approval.findRunApproval(ticketId, manifestDigest(manifest))
+    // The operator has not answered yet: the effect waits for the decision.
     if (!record) return false
+    if (record.decision !== 'approved') {
+      tickets.report(ticketId, { state: 'blocked', summary: `The human denied the run of ${manifest.featureDir}` })
+      return true
+    }
     const tasks = taskLines(manifest)
     const gate = tasks.find(task => task.kind === 'human')
     const segment = tasks.filter(task => task.kind === 'automated' && (!gate || task.order < gate.order))
-    this.reserve({
+    const reserved = this.reserve({
       ticketId,
       assignmentId: ticketId,
       manifest,
@@ -182,7 +195,8 @@ export class PrimeBridge {
       branch: `agent/${ticketId}`,
       workspace: join(workspaceRoot(), ticketId),
     })
-    return true
+    // Another segment holds the runner slot, so the request waits for the slot instead of losing the run.
+    return !!reserved
   }
 
   /**
@@ -190,18 +204,29 @@ export class PrimeBridge {
    * @returns Whether the decision was found and the next segment was reserved.
    */
   async awaitGate(segmentId: string): Promise<boolean> {
-    const { store } = this.host
+    const { store, tickets } = this.host
     const segment = store.bridge.segments.get(segmentId)
     if (!segment || segment.phase !== 'gate_wait') return true
     const manifest = this.host.manifest(segment.ticketId)
-    if (!manifest || !segment.nextGateId) return false
+    if (!manifest || !segment.nextGateId) {
+      tickets.report(segment.ticketId, { state: 'blocked', summary: 'The gate of the run has no approved manifest' })
+      return true
+    }
     const gate = taskLines(manifest).find(task => task.id === segment.nextGateId)
-    if (!gate) return false
+    if (!gate) {
+      tickets.report(segment.ticketId, { state: 'blocked', summary: `The gate ${segment.nextGateId} is not an approved task` })
+      return true
+    }
     const record = await this.host.approval.findGateApproval(segment.ticketId, segment.nextGateId, manifestDigest(manifest), {
       taskLine: `${gate.id} ${gate.text}`,
       parent: segment.baseRevision ?? '',
     })
+    // The operator has not decided the gate yet: the effect waits for the decision.
     if (!record) return false
+    if (record.decision !== 'approved') {
+      tickets.report(segment.ticketId, { state: 'blocked', summary: `The human denied the gate ${segment.nextGateId}` })
+      return true
+    }
     const reserved = await this.resumeAfterGate(segmentId)
     return !!reserved
   }
