@@ -22,6 +22,23 @@ service and GitHub operations only with operator approval in a disposable enviro
 
 ## 1. Run existing checks
 
+Dependencies install with the committed lockfile:
+
+```sh
+pnpm install --frozen-lockfile
+```
+
+Measured on 2026-11-01 in this environment: Node v24.21.0, pnpm 11.7.0, git 2.53.0,
+tmux 3.6, Python 3.14.4, GitHub CLI 2.46.0. The deployment guide asks for GitHub CLI
+2.48 or later; the installed 2.46 serves the API calls this feature makes, and the
+upgrade belongs to the deployment, not to the bridge.
+
+`pnpm exec vitest run` reports 1196 passing and one failing test in
+`tests/sources.spec.ts` ("drops the events it reads once the Source is off"). The
+same file passes when it runs alone, so the failure is order-dependent and flaky.
+The prototype's own sources were not modified at this point, which `git diff`
+against the upstream commit confirms.
+
 From this repository, after dependencies are installed and the feature is implemented:
 
 ```sh
