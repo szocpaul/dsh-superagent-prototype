@@ -486,6 +486,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/prime-publication-race.spec.ts` | The publication race: an unknown, delayed, or lease-refused remote outcome, and the one pull request a segment owns |
 | `tests/smoke.spec.ts` | The disposable fixture's check, which the smoke's verification reruns against the exact revision |
 | `tests/prime-plan-paths.spec.ts` | The writable scope a plan proposes: the source tree rather than the documentation tree |
+| `tests/prime-question-mention.spec.ts` | The question the operator receives names the agent account its decision comment has to mention |
 | `tests/prime-allowlist.spec.ts` | The approver allowlist: the agent's own account is never among the accounts that may approve |
 | `tests/prime-run-request.spec.ts` | The run request: the repository the manifest names, and the approval that follows on the same repository |
 | `tests/prime-approval-wait.spec.ts` | The approval of a run: the effect that waits for the human decision, the run that starts on it, and the refusal that reserves nothing |

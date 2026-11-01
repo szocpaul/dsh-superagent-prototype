@@ -37,17 +37,15 @@ the disposable feature `specs/002-smoke-fixture`. The plan is in
 `specs/001-prime-runner-bridge/operator-steps.md`.
 
 **The state at the end of 2026-11-01**: the Ticket `8b43e5eb` waits for the
-operator's approval. Its manifest was built at the baseline commit `3297d39` and
-names the writable paths `src/smoke.ts` and `tests/smoke.spec.ts`, the checks
-`pnpm run typecheck` and `pnpm run test`, the tasks `T001` to `T005` with `T003`
-as the human gate, and the environment digest `8947a897`. Its manifest digest was
+operator's approval. Its manifest names the writable paths `src/smoke.ts` and
+`tests/smoke.spec.ts`, the checks `pnpm run typecheck` and `pnpm run test`, the
+tasks `T001` to `T005` with `T003` as the human gate, and the environment digest
+`8947a897`. Every comment on issue #4 was deleted afterwards by the operator's own
+account, so the issue is empty.
 
-```text
-4f07f70b1d16583a225e56b7b2d65171a5abda4daaeb2afb6f6bc0fdd0005b1b
-```
-
-Every comment on issue #4 was deleted afterwards by the operator's own account, so
-the issue is empty and the digest was never read there.
+**Do not write the digest down.** The manifest names its baseline commit, so every
+commit invalidates it. Read the digest the Ticket's question names, in the panel or
+in the comment the system posts on the issue.
 
 **The next step, in order:**
 
@@ -72,9 +70,7 @@ Post a **fresh** request rather than approving the digest above: the manifest na
 its baseline commit, so a manifest built before a later commit is stale. The digest
 changes with every commit, so always approve the digest the system posts.
 
-**A known defect in the question text**: the Ticket asks the operator to approve
-with `@<agent> APPROVE RUN <digest>`, and that `@<agent>` is a literal placeholder
-that was never substituted with the agent's login. The approval comment must name
+The question names the agent account, so the approval comment must mention
 `@szocpaul-dsh-agent`; the parser accepts no other form.
 
 ## The local deployment
@@ -134,6 +130,11 @@ GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git p
   completing, so a run still starts when the operator answers, and a refusal ends it.
   A denial is recorded by `denyRun` with the same evidence checks as an approval, and
   the Ticket is reported as blocked rather than left waiting forever.
+- **The approval question named a placeholder.** It asked for
+  `@<agent> APPROVE RUN <digest>` without substituting the agent's login, so the
+  operator could not have answered from the notice alone. Both the run question and
+  the gate question now name the account; `tests/prime-question-mention.spec.ts`
+  proves it.
 - **The worker prompt has a length budget** of 1000 characters and the worker session
   has a model budget of 40500. `tests/cards.spec.ts` and `tests/model-surface.spec.ts`
   enforce both, so keep new instructions in `prompts/work.md` and keep the worker

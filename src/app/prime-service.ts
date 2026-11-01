@@ -171,6 +171,7 @@ export function createPrimeBridge(deps: PrimeServiceDeps, adapters: PrimeAdapter
     quota: adapters.quota(),
     tickets,
     manifest: (ticketId: string) => store.get(manifestKey(ticketId)),
+    agentLogin: () => deps.deployment().github.login,
     now: () => deps.now(),
   }
   return new PrimeBridge(host)
@@ -195,7 +196,7 @@ export async function requestRun(deps: PrimeServiceDeps, ticketId: string, featu
   store.set(manifestKey(ticketId), manifest)
   const summary = `The manifest of ${featureDir} is ${digest}. It names ${manifest.allowedPaths.length} writable path(s), `
     + `${manifest.tasks.length} task(s), ${manifest.checks.length} check(s), and the environment ${manifest.environment.digest}.`
-  const question = `Approve this exact manifest with \`@<agent> APPROVE RUN ${digest}\`, or change the scope before approving it.`
+  const question = `Approve this exact manifest with \`@${deps.deployment().github.login} APPROVE RUN ${digest}\`, or change the scope before approving it.`
   deps.effects.enqueue('prime-approval', ticketId, { ticketId })
   deps.report(ticketId, { state: 'progress', summary, question })
   const ticket = store.tickets.get(ticketId)

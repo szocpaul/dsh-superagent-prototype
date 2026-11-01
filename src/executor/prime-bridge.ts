@@ -119,6 +119,8 @@ export interface BridgeHost {
   tickets: TicketPort
   /** The manifests a Ticket asked to run, by Ticket ID. */
   manifest(ticketId: string): ApprovedManifest | undefined
+  /** The login of the agent account, which a decision comment has to mention. */
+  agentLogin(): string
   now(): string
 }
 
@@ -460,7 +462,7 @@ export class PrimeBridge {
     if (outcome.runner.outcome === 'gate') {
       this.phase(segment, 'gate_wait')
       const gate = taskLines(manifest).find(task => task.id === outcome.runner.nextGateId)
-      const question = gate ? gateQuestion(gate, manifest)
+      const question = gate ? gateQuestion(gate, manifest, this.host.agentLogin())
         : `The Prime run stopped at the human gate ${outcome.runner.nextGateId ?? ''}.`
       const request = gate ? gateDecisionRequest(gate, manifest) : undefined
       const evidence = `the draft pull request ${delivered.prNumber ? `#${delivered.prNumber}` : '(none yet)'} and the verified result ${outcome.verification.resultRevision}`

@@ -41,13 +41,14 @@ export function gateSegment(tasks: readonly TaskLine[], from = 0): GateSegment {
  * @param gate The gate the run stopped at.
  * @param manifest The approved manifest the run is bound to.
  */
-export function gateQuestion(gate: TaskLine, manifest: ApprovedManifest): string {
+export function gateQuestion(gate: TaskLine, manifest: ApprovedManifest, agentLogin = ''): string {
   const digest = manifestDigest(manifest)
+  const mention = agentLogin ? `@${agentLogin}` : '@<agent>' 
   return `The run stopped at the human gate ${gate.id}: ${gate.text}. `
     + `The approved manifest is ${digest}. `
     + `To continue, make exactly one change in the approved task list: set the checkbox of ${gate.id} from [ ] to [x], `
     + `with a GitHub-authenticated web edit whose verified signer is bound to your own identity. `
-    + `Then reply in this conversation with \`@<agent> APPROVE GATE ${gate.id} ${digest} <full-gate-commit-sha>\`. `
+    + `Then reply in this conversation with \`${mention} APPROVE GATE ${gate.id} ${digest} <full-gate-commit-sha>\`. `
     + `Nothing behind the gate starts before that decision is recorded.`
 }
 
