@@ -41,6 +41,26 @@ gh-agent api user --jq .login
 The last command prints the agent's login. Use exactly this login wherever the
 deployment asks for the agent account. Never reuse the human account's token.
 
+Git commands need the same identity. Give them an isolated configuration file
+instead of changing the operator's global Git setup, the way the deployment
+guide does for the worker environment:
+
+```sh
+cat > ~/.config/gh-agent/gitconfig <<'EOF'
+[credential "https://github.com"]
+	helper = !/home/ubuntu/.local/bin/gh-agent auth git-credential
+EOF
+```
+
+Use it per command:
+
+```sh
+GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git push
+```
+
+Without it, Git resolves the operator's own credential helper first and pushes
+under the operator's account.
+
 Do not store the token in this repository, in a prompt, in a report, or in a
 specification. The file under `~/.config/gh-agent` holds it.
 
@@ -57,7 +77,12 @@ The permission is `push`, not `admin` and not `maintain`. The agent needs to
 create branches and open pull requests. It must not be able to change the
 branch rules, and it must not be able to merge: the protected `main` refuses a
 merge by the account that pushed the branch, and refuses an administrator
-merge as well.
+merge as well. GitHub sends this as an invitation for an outside account, so
+the agent account must accept it once, signed in as itself.
+
+Verified on 2026-11-01: the agent's pull request could not be merged, not even
+with administrator privileges, and the operator's merge was refused until the
+operator approved the pull request.
 
 Verify the result:
 

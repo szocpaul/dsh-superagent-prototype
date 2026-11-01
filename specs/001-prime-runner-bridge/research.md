@@ -70,6 +70,11 @@ rule applies to administrators, and the last pusher cannot approve its own pull
 request. Merge remains a human action on a different account. See
 [operator-steps.md](operator-steps.md).
 
+Verified on 2026-11-01 with the agent account `szocpaul-dsh-agent`: the agent's
+own pull request could not be merged, not even with administrator privileges,
+and the operator's merge was refused until the operator approved it. The agent
+account holds `write` access only.
+
 ## 3. Task progress and gate decisions
 
 **Decision**: Pin exact `spec.md`, `plan.md`, and `tasks.md` bytes at the approved
