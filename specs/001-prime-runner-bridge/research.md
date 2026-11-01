@@ -138,6 +138,20 @@ scope shapes that cannot be confined. Require a real startup confinement and cgr
 probe; fail closed if unavailable. The runner receives only approved model credentials
 and network access needed for the task and objective checks.
 
+Proven on the target host on 2026-11-01 (see
+[runtime-report.md](runtime-report.md)): the isolation uses `bubblewrap`, because raw
+unprivileged user namespaces are denied there by AppArmor and `bwrap` is the one
+verified exemption. The profile masks the home directory and the host `/tmp` with
+`tmpfs` layers, keeps a private `/proc`, and unshares the network, pid, ipc and uts
+namespaces. The Prime daemon listens on a shared `/tmp` socket by default, so the
+runner needs its own daemon socket and the host `/tmp` must be masked. The runner's
+own service unit owns a delegated cgroup whose kill file terminates the whole
+process tree and whose empty process list proves quiescence.
+
+The isolation contains the agent's mistakes and protects the repository. It is not a
+privilege boundary against the operator's account, which holds passwordless root on
+this host and can bypass every restriction. The documentation states this.
+
 **Operator decision, 2026-11-01**: accepted with an explicit limit. The enforced
 controls are the writable paths, the process and network boundary, the credentials and
 the stop behavior. The task order inside an allowed path is instructed, not

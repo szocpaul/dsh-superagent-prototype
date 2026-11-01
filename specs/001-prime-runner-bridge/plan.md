@@ -142,7 +142,9 @@ inspecting existing boundaries; do not put a new policy decision in an LLM promp
    document environment restrictions and perform a separately authorized live smoke.
 
 See [research.md](research.md), [data-model.md](data-model.md),
-[contracts/bridge.md](contracts/bridge.md), and [quickstart.md](quickstart.md).
+[contracts/bridge.md](contracts/bridge.md), [quickstart.md](quickstart.md),
+[operator-steps.md](operator-steps.md), and the proven host mechanisms in
+[runtime-report.md](runtime-report.md).
 
 ## Complexity Tracking
 

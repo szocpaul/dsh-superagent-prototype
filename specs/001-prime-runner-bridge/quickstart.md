@@ -53,6 +53,13 @@ quota guard, and external process adapters. The tests MUST cover:
 
 ## 3. Real containment and process-lifecycle test
 
+The host mechanisms this test relies on are already proven on the target host and
+recorded in [runtime-report.md](runtime-report.md): `bubblewrap` isolation with a
+masked home and `/tmp`, a delegated service cgroup whose kill file empties a
+nested process tree, and the `cgroup.procs`, `pids.current` and `populated` reads
+that show quiescence. The implementation must use those mechanisms, not invent
+its own.
+
 In a disposable Linux test environment, explicitly start the test supervisor and
 private daemon after the operator approves the environment. The implementation must
 provide a documented command for this test before release. It must demonstrate:
@@ -65,6 +72,8 @@ provide a documented command for this test before release. It must demonstrate:
    event retain the reservation/guard until identity and quiescence are established.
 4. Failed containment or quota guard prevents prompt release; unconfirmed stop keeps
    monitoring active and shows the actual outcome.
+5. The host Prime daemon socket stays unreachable from inside the sandbox, and the
+   runner uses its own private socket.
 
 If any claim cannot be reproduced on the target host, leave the feature disabled.
 Use external non-LLM monitoring; do not create a Prime heartbeat for quota checks.

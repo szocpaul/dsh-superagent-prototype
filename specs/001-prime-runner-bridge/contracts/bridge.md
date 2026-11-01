@@ -137,6 +137,22 @@ commands, hooks or writes block rather than silently run outside the manifest. T
 exact gate-aware adapter and supported hook semantics are implementation acceptance
 criteria, not claims about the installed command.
 
+**Observed Spec Kit behavior, 2026-11-01**: the installed skills contain **no
+manual-gate handling at all**; the gate discipline belongs to the operator's own
+`autonomous-spec-runner` skill. The bridge must therefore implement the gate
+boundary itself and must not rely on the installed skill to stop at one. The
+installed `/skill:speckit-implement` also creates or verifies ignore files
+(`.gitignore`, `.npmignore`, `.dockerignore` and others), which falls outside the
+approved scope: the manifest must name those files or the bridge must exclude
+them. The Spec Kit CLI cannot run these steps headlessly here, because the
+generic integration does not support command dispatch, so `specify workflow run`
+fails; the runner must be an agent session that invokes the skills. The active
+feature directory comes from `SPECIFY_FEATURE_DIRECTORY` and then
+`.specify/feature.json`, and setting the environment variable rewrites that file
+unless `SPECIFY_FEATURE_NO_PERSIST=1` is set, so the bridge sets the directory
+per run and keeps the shared state unchanged. See
+[runtime-report.md](../runtime-report.md).
+
 ## 4. Result/report schema
 
 ```json
