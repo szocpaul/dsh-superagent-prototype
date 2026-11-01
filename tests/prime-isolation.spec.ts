@@ -78,7 +78,20 @@ function fakeRunner(result: { exitCode?: number; stdout?: string; stderr?: strin
     },
     spawn(argv, options) {
       calls.push({ argv, options })
-      return { pid: 4242, kill() {}, async wait() { return { exitCode: 0, stdout: result.stdout ?? '', stderr: '' } } }
+      const stdout = result.stdout ?? ''
+      const stderr = result.stderr ?? ''
+      // A real runner keeps running: it reports its identity and then works. The fake ends only when the
+      // result says it failed before it could report one.
+      const endsWithoutIdentity = result.exitCode !== undefined && result.exitCode !== 0
+      let ended = endsWithoutIdentity
+      return {
+        pid: 4242,
+        kill() { ended = true },
+        output() { return stdout },
+        stderr() { return stderr },
+        ended() { return ended },
+        async wait() { return { exitCode: result.exitCode ?? 0, stdout, stderr } },
+      }
     },
   }
 }
@@ -283,8 +296,15 @@ describe('supervised runner', () => {
   })
 
   it('fails closed when the runner reports no durable session identity', async () => {
-    const supervisor = new PrimeSupervisor(fakeRunner({ stdout: 'nothing useful\n' }), environment())
+    // The runner ends without an identity: it failed to start, so the run cannot be reconciled later.
+    const supervisor = new PrimeSupervisor(fakeRunner({ stdout: 'nothing useful\n', exitCode: 1 }), environment())
     await expect(supervisor.launch(isolationPlan(manifest(), root), identity)).rejects.toThrow(IsolationError)
+  })
+
+  it('fails closed when the runner keeps running without ever reporting an identity', async () => {
+    const supervisor = new PrimeSupervisor(fakeRunner({ stdout: 'nothing useful\n' }), environment())
+    const plan = { ...isolationPlan(manifest(), root), env: { ...isolationPlan(manifest(), root).env, IDENTITY_TIMEOUT_MS: '300' } }
+    await expect(supervisor.launch(plan, identity)).rejects.toThrow(IsolationError)
   })
 
   it('observes the durable session identity of the launched run', async () => {

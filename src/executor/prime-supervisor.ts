@@ -6,7 +6,7 @@
  * or a missing durable session identity stops the run instead of producing a claimed success.
  */
 import { buildBwrapArgs, IsolationError } from '../infra/prime-isolation.ts'
-import type { IsolationPlan, IsolationRunner } from '../infra/prime-isolation.ts'
+import type { IsolationPlan, IsolationProcess, IsolationRunner } from '../infra/prime-isolation.ts'
 import type { SegmentRunnerIdentity } from './prime-model.ts'
 
 /** The host services the supervisor needs for one run. */
@@ -67,6 +67,9 @@ export interface CleanupResult {
   removed: string[]
 }
 
+/** How long the launch waits for the runner to report its durable session identity. */
+const IDENTITY_TIMEOUT_MS = 120_000
+
 const SESSION_ID = /session[_\s-]?id\s*[:=]\s*"?([^\s"]+)"?/i
 const SESSION_FILE = /session[_\s-]?file\s*[:=]\s*"?([^\s"]+)"?/i
 
@@ -118,13 +121,41 @@ export class PrimeSupervisor {
     if (!this.environment.supported()) throw new IsolationError('the host cannot provide the confinement the bridge requires, so the bridge stays disabled')
     await this.environment.start(plan, identity)
     const argv = buildBwrapArgs(plan)
-    const result = await this.runner.run(argv, { cwd: plan.workspace, env: plan.env })
-    if (result.exitCode !== 0) throw new IsolationError(`the runner ended with code ${result.exitCode}: ${result.stderr.trim()}`)
-    const session = parseSessionIdentity(result.stdout)
+    // The runner is a long-running process: it is started in the background and its durable identity is awaited,
+    // rather than waiting for it to end. A run that ends before it reports an identity failed to start.
+    const process = this.runner.spawn(argv, { cwd: plan.workspace, env: plan.env })
+    const configured: number = Number(plan.env.IDENTITY_TIMEOUT_MS)
+    const timeoutMs: number = Number.isFinite(configured) && configured > 0 ? configured : IDENTITY_TIMEOUT_MS
+    const session = await this.awaitSessionIdentity(process, timeoutMs)
     if (!session.sessionId || !session.sessionFile) {
+      process.kill(9)
       throw new IsolationError('the runner reported no durable session identity, so the run cannot be reconciled later')
     }
-    return { identity: { ...identity, sessionId: session.sessionId, sessionFile: session.sessionFile }, argv, stdout: result.stdout }
+    return { identity: { ...identity, sessionId: session.sessionId, sessionFile: session.sessionFile }, argv, stdout: '' }
+  }
+
+  /**
+   * Waits for the runner to report its durable session identity.
+   *
+   * The runner prints the identity once it starts. A runner that ends without one failed, and the wait ends with
+   * the reason it gave.
+   */
+  private async awaitSessionIdentity(process: IsolationProcess, timeoutMs: number): Promise<{ sessionId?: string; sessionFile?: string }> {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      const found = parseSessionIdentity(process.output())
+      if (found.sessionId && found.sessionFile) return found
+      if (process.ended()) {
+        const found = parseSessionIdentity(process.output())
+        if (found.sessionId && found.sessionFile) return found
+        throw new IsolationError(`the runner ended before it reported a session identity: ${process.stderr().trim() || 'no diagnostic'}`)
+      }
+      if (Date.now() > deadline) {
+        process.kill(9)
+        throw new IsolationError(`the runner reported no session identity within ${Math.round(timeoutMs / 1000)} s`)
+      }
+      await new Promise(resolve => setTimeout(resolve, 250))
+    }
   }
 
   /**

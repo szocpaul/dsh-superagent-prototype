@@ -248,7 +248,7 @@ export class Runtime extends Service implements SourceHost {
     this.primeDeps = deps
     return createPrimeBridge(deps, {
       preflightHost: () => hostPreflightHost(deps),
-      runner: () => runnerAdapter(new PrimeSupervisor(localIsolationRunner, hostRunEnvironment())),
+      runner: () => runnerAdapter(new PrimeSupervisor(localIsolationRunner, hostRunEnvironment(deps.commands()))),
       verify: () => runtime.verifyAdapter(),
       delivery: () => deliveryAdapter(deps, ledger),
       quota: () => quotaAdapter(deps),

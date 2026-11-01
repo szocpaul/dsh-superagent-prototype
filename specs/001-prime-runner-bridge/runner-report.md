@@ -80,20 +80,27 @@ stub that did not enforce the rule).
 
 ## 2b. Task count
 
-47 of the 50 tasks in T004-T053 are complete and ticked; three are not (T007, T025,
-T053). The summary of this run was delivered to the sibling session
-`prime-runner-launcher` on 2026-11-01 (message id `agentmsg_b9ba2dc9-ce1e-4146-b833-1abe2bf47eeb`).
+The autonomous run completed 47 of the 50 tasks in T004-T053. The three it left
+open (T007, T025, T053) were closed afterwards under the operator's
+instruction; see section 4b. All 50 are now ticked, and T054-T056 remain, of
+which T054 is a MANUAL GATE. The summary of this run was delivered to the sibling
+session `prime-runner-launcher` on 2026-11-01 (message id
+`agentmsg_b9ba2dc9-ce1e-4146-b833-1abe2bf47eeb`).
 
 ## 3. What remains
 
-- **T007**: the accepted task grammar still has to be documented in
-  `specs/001-prime-runner-bridge/contracts/bridge.md`. It was left out because this
-  run's rules forbid changing spec artifacts other than `tasks.md` and this report.
-- **T025**: the bounded `prime-agent --autonomous` command, its bootstrap barrier, and
-  the private daemon's command line are not built; the supervisor starts the confined
-  runner around whatever command it is given.
-- **T053**: the delegated cgroup, its kill file, the empty-cgroup proof, and the
-  emergency watcher path are unproven in this session.
+The three tasks this run left open were closed afterwards; see section 4b. What
+still remains is the work that needs a real environment and the operator's
+authorization:
+
+- The verification adapter of the bridge throws, so every run blocks at the
+  verification step until a repository adapter supplies the controller's own
+  revision and reruns the approved checks in a separately confined verifier.
+- The GitHub and runner adapters have never run against a real repository or a
+  real runner.
+- The preflight's backend smoke command and the quota accounting command are
+  unset, so the preflight blocks the launch by design.
+- Task T054, the disposable live smoke, is not started.
 - The bridge's GitHub and runner adapters are seams with real implementations
   (`pullPort`, `runnerAdapter`, `hostPreflightHost`), but they have never run against
   a real repository or a real runner, because that needs the operator's authorization.
@@ -122,6 +129,66 @@ T053). The summary of this run was delivered to the sibling session
 5. **The `prime-approval` effect polls the original conversation.** It re-reads the
    Issue's comments every few minutes without an LLM; a decision that is never given
    keeps the effect queued. The operator may want a different cadence.
+
+## 4b. Follow-up work after the autonomous run
+
+The operator closed the three tasks the run left open. Each was verified
+independently.
+
+**T007, the task grammar.** The contract now states the accepted grammar: the
+line shape, the three-digit minimum of a task ID, the tags, the four gate words
+that mark a human gate, and what counts as authorized progress against a scope
+change. `tests/prime-tasks.spec.ts` proves the documentation against the parser,
+so the two cannot drift apart. Writing the test found one gap in the draft text:
+the ID minimum was missing, and the implementation refuses a two-digit ID.
+
+**T025, the bounded autonomous invocation.** `src/executor/prime-launch.ts` builds
+the argument vector from the approved manifest: the runner CLI, the goal bounded
+to the approved task range and the human gate, the limits from the approved
+environment, and each approved check as an exit-code gate. The task prompt names
+the approved files and states the constraints; it never repeats the
+specification's content.
+
+Two defects were found and fixed while doing this. The supervisor waited for the
+runner to end, which a multi-hour autonomous run never does, so the runner now
+starts in the background and its durable session identity is awaited instead.
+And the barrier was written after the launch returned, which would have deadlocked
+a runner that waits for it; the barrier is now released only after the controller
+knows the identity, and the runner cannot work before it can be reconciled. The
+preflight now checks exactly the flags the launch uses.
+
+**T053, the delegated cgroup.** The implementation created its cgroup under
+`/sys/fs/cgroup/prime-runner`, which no unprivileged account may write; the
+cgroup v2 hierarchy is writable only under the user manager's own root. The run's
+own user service unit now creates the cgroup with `Delegate=yes`, and the code
+reads the resulting path from systemd instead of assuming one.
+`tests/prime-cgroup-delegation.spec.ts` proves on this host that the cgroup
+appears under the delegated root, that the kill file empties the process list,
+and that an empty list is the proof a stop needs.
+
+### Commands run for the follow-up work
+
+| Command | Exit |
+| --- | --- |
+| `pnpm exec vitest run tests/prime-tasks.spec.ts` | 0 |
+| `pnpm exec vitest run tests/prime-launch.spec.ts` | 0 |
+| `pnpm exec vitest run tests/prime-bootstrap-barrier.spec.ts` | 0 |
+| `pnpm exec vitest run tests/prime-cgroup-delegation.spec.ts` | 0 |
+| `pnpm exec vitest run tests/prime-isolation.spec.ts` | 0 |
+| `pnpm exec vitest run tests/docs.spec.ts` | 0 |
+| `pnpm exec vitest run` | 0 (77 files, 1480 tests) |
+| `pnpm exec tsc --noEmit` | 0 |
+| `pnpm check` | 0 |
+
+### Still open
+
+The verification adapter of the bridge throws until a repository adapter supplies
+the controller's own revision and the reruns of the approved checks in a
+separately confined verifier. The GitHub and runner adapters have never run
+against a real repository or a real runner. The preflight's backend smoke command
+and the quota accounting command are still unset, so the preflight blocks the
+launch by design. These need the operator's authorization and a real
+environment; they are what task T054 asks for.
 
 ## 5. Human decisions still needed
 

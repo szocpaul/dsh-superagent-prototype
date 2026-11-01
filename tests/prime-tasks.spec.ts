@@ -62,3 +62,33 @@ describe('progress and scope', () => {
     expect(scopeViolations(done, approved).map(item => item.id)).toEqual(['T001', 'T002', 'T003', 'T004'])
   })
 })
+
+describe('the documented task grammar', () => {
+  it('accepts the documented line shape', () => {
+    const [task] = parseTasks('- [ ] T012 [P] [US1] Create the model in src/executor/prime-model.ts')
+    expect(task?.id).toBe('T012')
+    expect(task?.kind).toBe('automated')
+    expect(task?.tags).toEqual(['P', 'US1'])
+    expect(task?.text).toBe('Create the model in src/executor/prime-model.ts')
+  })
+
+  it('treats the documented gate words as human gates', () => {
+    for (const word of ['MANUAL GATE', 'HUMAN GATE', 'GATE', 'MANUÁLIS KAPU']) {
+      const [task] = parseTasks(`- [ ] T020 [P] ${word} - something`)
+      expect(task?.kind).toBe('human')
+    }
+  })
+
+  it('refuses what the documentation says it refuses', () => {
+    expect(() => parseTasks('- [ ] Create the model')).toThrow()
+    expect(() => parseTasks('- [ ] X12 nope')).toThrow()
+    expect(() => parseTasks('- [ ] T012 a\n- [ ] T012 b')).toThrow()
+    expect(() => parseTasks('- [ ] not a task')).toThrow()
+    expect(() => parseTasks('no tasks here')).toThrow()
+    expect(() => parseTasks('- [ ] T12 too short')).toThrow()
+  })
+
+  it('accepts a star bullet, as the documentation says', () => {
+    expect(parseTasks('* [ ] T013 Automate the delivery')[0]?.id).toBe('T013')
+  })
+})

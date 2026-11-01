@@ -99,9 +99,21 @@ export function systemdUnitName(segmentId: string): string {
   return `prime-runner-${identityKey(segmentId)}`
 }
 
-/** The delegated cgroup that holds the process tree of one run. */
+/**
+ * The delegated cgroup root the run's service unit creates under.
+ * The cgroup v2 hierarchy is delegated to the unprivileged user only under the
+ * user manager's own root; the session scope and the system slices are root
+ * owned and cannot be written to.
+ */
+export const CGROUP_ROOT = '/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice'
+
+/**
+ * The delegated cgroup that holds the process tree of one run.
+ * It is created by the run's user service unit, whose `Delegate` property gives
+ * the unit its own cgroup under {@link CGROUP_ROOT}.
+ */
 export function cgroupPath(segmentId: string): string {
-  return `/sys/fs/cgroup/prime-runner/${identityKey(segmentId)}`
+  return `${CGROUP_ROOT}/${systemdUnitName(segmentId)}.service`
 }
 
 /** The name of the private tmux server of one run. */
@@ -232,6 +244,12 @@ export interface IsolationProcess {
   kill(signal?: number): void
   /** Waits for the process to end and returns its result. */
   wait(): Promise<IsolationRunResult>
+  /** The output the process has written so far. */
+  output(): string
+  /** The error output the process has written so far. */
+  stderr(): string
+  /** Whether the process has already ended. */
+  ended(): boolean
 }
 
 /** The adapter the supervisor uses to start and observe confined processes. */
@@ -278,9 +296,14 @@ export const localIsolationRunner: IsolationRunner = {
     child.stderr?.setEncoding('utf8')
     child.stdout?.on('data', chunk => { stdout += chunk })
     child.stderr?.on('data', chunk => { stderr += chunk })
+    let ended = false
+    child.on('close', () => { ended = true })
     const handle: IsolationProcess = {
       pid: child.pid ?? -1,
       kill(signal?: number) { child.kill(signal ?? 'SIGTERM') },
+      output() { return stdout },
+      stderr() { return stderr },
+      ended() { return ended },
       async wait() {
         const code = await new Promise<number | null>(resolve => {
           child.on('error', () => resolve(null))

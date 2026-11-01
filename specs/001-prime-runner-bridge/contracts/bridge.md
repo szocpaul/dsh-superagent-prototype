@@ -156,6 +156,43 @@ unless `SPECIFY_FEATURE_NO_PERSIST=1` is set, so the bridge sets the directory
 per run and keeps the shared state unchanged. See
 [runtime-report.md](../runtime-report.md).
 
+## 3a. The accepted task grammar
+
+The approved task list is a Markdown list whose task lines follow one shape. The
+parser is deliberately narrow: it fails closed on anything it cannot read
+unambiguously, instead of inferring what a list meant.
+
+```text
+- [ ] T012 [P] [US1] Create the model in src/executor/prime-model.ts
+```
+
+- The line starts with `-` or `*`, then a checkbox: `[ ]`, `[x]` or `[X]`.
+- The task ID follows, matching `T` followed by three or more digits, so `T012`
+  is a task ID and `T12` is not. IDs are unique in the file; a repeat is
+  refused.
+- Any number of tags may follow in square brackets, such as `[P]` for a
+  parallel task or `[US1]` for the user story it serves. The tags are read and
+  kept, and they do not change the task's meaning.
+- The rest of the line is the task's text.
+
+A task is a **human gate** when its text begins with one of `MANUAL GATE`,
+`HUMAN GATE`, `GATE` or `MANUÁLIS KAPU`. Every other task is automated. A line
+that looks like a checkbox but does not match this grammar is refused; the
+message names the line.
+
+The segment of a run is the approved tasks up to the first human gate. The
+runner works on that segment and stops at the gate.
+
+**What counts as progress.** Comparing the approved task list with the current
+one yields, per task, one of: a checkbox change, an addition, a removal, a
+reordering, or an edit of the task's text. Only a checkbox change of an
+automated task is authorized progress. A new, removed, reordered, or edited
+task changes the approved scope and needs a new approval. A human gate may only
+be completed by a person, and a task that was already checked may not be
+unchecked.
+
+A task list with no task lines is refused.
+
 ## 4. Result/report schema
 
 ```json

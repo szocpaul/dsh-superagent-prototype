@@ -405,6 +405,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/executor/prime-preflight.ts` | The preflight: the Prime CLI, its flags, the skill expansion, the interpreter, the checks, the confinement, the monitor, and the environment |
 | `src/infra/prime-isolation.ts` | The containment adapter: the isolation plan, the bubblewrap argument vector, the deterministic identities, the containment probes, and the artifact collection |
 | `src/executor/prime-supervisor.ts` | The supervisor over that adapter: the launch, the stop with its empty-cgroup proof, the quiescence, and the cleanup |
+| `src/executor/prime-launch.ts` | The bounded autonomous invocation built from the approved manifest, and the bootstrap barrier that holds the runner until the controller knows its identity |
 | `src/executor/prime-quota.ts` | The quota guard: the guard script's contract, the watcher, the durable alert, the emergency stop, and the cleanup of the run's own resources |
 | `src/executor/prime-report.ts` | The runner's report as untrusted data: its strict schema, the redaction, the distinct failure causes, and the notice text |
 | `src/executor/prime-verify.ts` | The controller's own verification: the workspace snapshot, the scope audit, the result revision, the rerun of the checks, and the convergence assessment |
@@ -466,6 +467,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/prime-tasks.spec.ts` | The task grammar, the progress comparator, and the scope changes it refuses |
 | `tests/prime-store.spec.ts` | The bridge records in the Store: the single runner reservation and its release, the durable approvals, reports and failures, and the bridge effects |
 | `tests/prime-isolation.spec.ts` | The isolation plan, the argument vectors, the containment probes, the quiescence verdicts, and the artifact collection |
+| `tests/prime-launch.spec.ts` | The bounded autonomous invocation: the vector built from the manifest, the bounded goal, and the task prompt's constraints |
+| `tests/prime-bootstrap-barrier.spec.ts` | The bootstrap barrier: the runner starts in the background and the controller knows its identity before the work begins |
+| `tests/prime-cgroup-delegation.spec.ts` | The delegated cgroup of a run: its place under the delegated root, the kill file, and the empty process list that proves a stop |
 | `tests/prime-quota.spec.ts` | The quota guard: its explicit identity, the thresholds, the fail-closed accounting, the emergency stop, and the cleanup |
 | `tests/prime-approval.spec.ts` | The run approval: the exact comment form, the allowlist, the policy, the edited comment, and the revoked approver |
 | `tests/prime-gate-approval.spec.ts` | The human gate: the verified signer, the one-checkbox diff, the bound decision, and every wrong variant |

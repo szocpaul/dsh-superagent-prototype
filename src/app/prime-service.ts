@@ -17,6 +17,7 @@ import { deliver as deliverPull, type BranchProtection, type CreatePullInput, ty
   type PullRef, type PullState, type UpdatePullInput } from '../executor/prime-delivery.ts'
 import { QuotaMonitor, type GuardIdentity } from '../executor/prime-quota.ts'
 import { buildManifest, manifestDigest, type ManifestSource } from '../executor/prime-manifest.ts'
+import { buildLaunchInvocation, AUTONOMOUS_FLAGS } from '../executor/prime-launch.ts'
 import { preflight, type PreflightHost } from '../executor/prime-preflight.ts'
 import { approvalEvidence, approvalIsCurrent, approveRun, verifyGateCommit, verifyGateDecision, type AccountType,
   type ApprovalEvidence, type ApprovalSource } from './prime-approval.ts'
@@ -185,11 +186,20 @@ export async function requestRun(deps: PrimeServiceDeps, ticketId: string, featu
 
 
 /** The host services of a run: its cgroup, socket, tmux server, and scratch directory. */
-export function hostRunEnvironment(): RunEnvironment {
+export function hostRunEnvironment(commands: Commands): RunEnvironment {
   return {
     supported: () => existsSync('/usr/bin/bwrap') || existsSync('/bin/bwrap'),
     async start(plan: IsolationPlan, identity: SegmentRunnerIdentity): Promise<void> {
-      mkdirSync(identity.cgroup, { recursive: true })
+      // The cgroup is created by the run's own user service unit, whose Delegate
+      // property places it under the delegated root the account may write to.
+      // Creating it here would fail: the cgroup v2 hierarchy is writable only
+      // under the user manager's own root, never under the login session scope.
+      const unit = identity.serviceUnit.endsWith('.service') ? identity.serviceUnit : `${identity.serviceUnit}.service`
+      await commands.run('systemd-run', ['--user', `--unit=${unit}`, '--property=Delegate=yes', '--collect', '/bin/sleep', 'infinity'])
+      const shown = await commands.run('systemctl', ['--user', 'show', unit, '--property=ControlGroup', '--value'])
+      const cgroup = shown.trim()
+      if (!cgroup.startsWith('/')) throw new Error(`the run's service unit reported no cgroup: ${shown.trim() || 'empty'}`)
+      identity.cgroup = `/sys/fs/cgroup${cgroup}`
       mkdirSync(dirname(identity.socket), { recursive: true })
       mkdirSync(plan.workspace, { recursive: true })
     },
@@ -218,8 +228,20 @@ export function hostRunEnvironment(): RunEnvironment {
 export function runnerAdapter(supervisor: PrimeSupervisor): RunnerPort {
   return {
     async launch(segment: BridgeSegment, manifest: ApprovedManifest): Promise<{ sessionId?: string; sessionFile?: string }> {
-      const plan = isolationPlan(manifest, segment.runner.workspace)
+      const barrierPath = join(segment.runner.workspace, '.prime-bridge-barrier')
+      const invocation = buildLaunchInvocation(manifest, {
+        taskIds: segment.taskIds,
+        nextGateId: segment.nextGateId ?? undefined,
+        barrier: { path: barrierPath, release: `${segment.segmentId}:${segment.generation}` },
+      })
+      const plan = isolationPlan(manifest, segment.runner.workspace, {
+        argv: invocation.argv,
+        segmentId: segment.segmentId,
+      })
       const result = await supervisor.launch(plan, segment.runner)
+      // The barrier is released only after the run's identities are known, so the runner cannot begin work
+      // before the controller can reconcile it.
+      writeFileSync(invocation.barrier.path, invocation.barrier.release)
       return { sessionId: result.identity.sessionId, sessionFile: result.identity.sessionFile }
     },
     async stop(segment: BridgeSegment): Promise<'stopped' | 'unconfirmed' | 'unknown'> {
@@ -358,7 +380,9 @@ export function hostPreflightHost(deps: PrimeServiceDeps): PreflightHost {
     async primeVersion(): Promise<string> { return (await run('prime-agent', ['--version'])).trim() },
     async primeFlags(flags: string[]): Promise<{ supported: boolean; missing: string[] }> {
       const help = await run('prime-agent', ['--autonomous', '--help'])
-      const missing = flags.filter(flag => !help.includes(flag))
+      // The launch uses exactly these flags, so the preflight checks exactly these and no other.
+      const required = [...new Set([...flags, ...AUTONOMOUS_FLAGS])]
+      const missing = required.filter(flag => !help.includes(flag))
       return { supported: missing.length === 0, missing }
     },
     async backendSmoke(): Promise<{ ok: boolean; detail: string }> {
@@ -384,7 +408,7 @@ export function hostPreflightHost(deps: PrimeServiceDeps): PreflightHost {
       return checks.map(check => ({ name: check.name, ok: true, detail: `the check ${check.argv.join(' ')} is approved` }))
     },
     async confinement(): Promise<{ ok: boolean; detail: string }> {
-      const environment = hostRunEnvironment()
+      const environment = hostRunEnvironment(commands)
       return environment.supported()
         ? { ok: true, detail: 'the host provides the bubblewrap confinement the manifest approves' }
         : { ok: false, detail: 'the host does not provide bubblewrap, so the bridge stays disabled' }
