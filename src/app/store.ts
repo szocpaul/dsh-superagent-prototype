@@ -1,9 +1,11 @@
 /** SQLite persistence for domain aggregates, key-value state, settings history, and the channel outbox. */
+import { randomUUID } from 'node:crypto'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { key, threadKey, type ChannelRef, type Decision, type OutboundMessage, type ReplyStatus, type Repositories, type Thread, type ThreadFact,
   type ThreadFacts, type Ticket, type Trigger, type TriggerDisposition } from '../core/index.ts'
+import type { ApprovalRecord, BridgeReport, BridgeSegment, FailureRecord, SegmentPhase } from '../executor/prime-model.ts'
 import { KV, type Family, type Key } from '../kv.ts'
 import { SettingsSchema, type Settings, type SettingsOrigin, type SettingsSave } from '../policy.ts'
 import { OLDEST_SCHEMA, SCHEMA_VERSION, migrateTo11, tooOld } from './migration.ts'
@@ -44,6 +46,13 @@ const SETS: Record<string, Record<string, string>> = {
 }
 export { SCHEMA_VERSION }
 /**
+ * The phases in which a run segment no longer holds the single runner slot. A blocked or failed run keeps it: the
+ * operator has to resolve it before a replacement may start.
+ */
+const TERMINAL_PHASES = new Set<SegmentPhase>(['stopped', 'ready'])
+/** The single runner slot is already held by another segment; the request must wait. */
+export class BridgeReservationError extends Error {}
+/**
  * SQLite backing store implementing domain `Repositories`, view read queries, versioned settings, outbox receipts, and key-value state.
  * The Runtime opens it after locking the state directory and automatically migrates supported older schemas on startup.
  * The Engine mutates domain aggregates inside `atomic` transactions while Sources, views, and the Outbox read state or update their own records.
@@ -83,7 +92,16 @@ export class Store implements Repositories {
             CREATE INDEX IF NOT EXISTS trigger_at ON trigger(at);
             CREATE INDEX IF NOT EXISTS trigger_thread_at ON trigger_thread(thread, at);
             CREATE INDEX IF NOT EXISTS decision_thread ON decision(thread);
+            CREATE TABLE IF NOT EXISTS bridge_segment (id TEXT PRIMARY KEY, value TEXT NOT NULL, ticket TEXT NOT NULL,
+              slot INTEGER, resolved INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS bridge_approval (id TEXT PRIMARY KEY, value TEXT NOT NULL, ticket TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS bridge_report (segment TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS bridge_failure (id TEXT PRIMARY KEY, value TEXT NOT NULL, ticket TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS effect_due ON effect(kind, due, seq);
+            CREATE INDEX IF NOT EXISTS bridge_segment_ticket ON bridge_segment(ticket);
+            CREATE INDEX IF NOT EXISTS bridge_approval_ticket ON bridge_approval(ticket);
+            CREATE INDEX IF NOT EXISTS bridge_failure_ticket ON bridge_failure(ticket);
+            CREATE UNIQUE INDEX IF NOT EXISTS bridge_segment_slot ON bridge_segment(slot) WHERE resolved = 0;
           `)
           this.addColumns()
           if (migrating) migrateTo11(this)
@@ -245,6 +263,103 @@ export class Store implements Repositories {
     save: (decision: Decision): void => { this.db.prepare('INSERT INTO decision VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, thread=excluded.thread').run(decision.id, decision.threadKey, JSON.stringify(decision)) },
     byThread: (threadKeyValue: string): Decision[] => this.db.prepare('SELECT value FROM decision WHERE thread=? ORDER BY rowid').all(threadKeyValue).map(row => JSON.parse(String(row.value)) as Decision),
   }
+  /** Durable bridge records of the Prime Runner Bridge: approvals, run segments, reports and failures. */
+  readonly bridge = {
+    /** The approval decisions a human made, kept with the Ticket they belong to. */
+    approvals: {
+      get: (id: string): ApprovalRecord | undefined => {
+        const row = this.db.prepare('SELECT value FROM bridge_approval WHERE id=?').get(id)
+        return row ? JSON.parse(String(row.value)) as ApprovalRecord : undefined
+      },
+      save: (record: ApprovalRecord): void => {
+        this.db.prepare('INSERT INTO bridge_approval (id, value, ticket) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, ticket=excluded.ticket')
+          .run(record.approvalId, JSON.stringify(record), record.ticketId)
+      },
+      byTicket: (ticketId: string): ApprovalRecord[] => this.values('SELECT value FROM bridge_approval WHERE ticket=? ORDER BY rowid', ticketId),
+    },
+    /** The run segments; at most one of them holds the single runner slot. */
+    segments: {
+      get: (segmentId: string): BridgeSegment | undefined => {
+        const row = this.db.prepare('SELECT value FROM bridge_segment WHERE id=?').get(segmentId)
+        return row ? JSON.parse(String(row.value)) as BridgeSegment : undefined
+      },
+      byTicket: (ticketId: string): BridgeSegment[] => this.values('SELECT value FROM bridge_segment WHERE ticket=? ORDER BY rowid', ticketId),
+      /**
+       * Stores the segment record. A segment whose generation or stop epoch is older than the stored one is stale and is
+       * dropped without changing anything. A segment that is not in a terminal phase holds the single runner slot.
+       */
+      save: (segment: BridgeSegment): void => this.atomic(() => {
+        const stored = this.db.prepare('SELECT value FROM bridge_segment WHERE id=?').get(segment.segmentId)
+        const previous = stored ? JSON.parse(String(stored.value)) as BridgeSegment : undefined
+        if (previous && (segment.generation < previous.generation || segment.stopEpoch < previous.stopEpoch)) return
+        const latest = this.get(KV.bridge.generation(segment.ticketId)) ?? 0
+        if (segment.generation < latest) return
+        const resolved = TERMINAL_PHASES.has(segment.phase) ? 1 : 0
+        try {
+          this.db.prepare(`INSERT INTO bridge_segment (id, value, ticket, slot, resolved) VALUES (?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET value=excluded.value, ticket=excluded.ticket, slot=excluded.slot, resolved=excluded.resolved`)
+            .run(segment.segmentId, JSON.stringify(segment), segment.ticketId, resolved ? null : 1, resolved)
+        } catch (error) {
+          if (error instanceof Error && error.message.includes('UNIQUE constraint failed')) {
+            throw new BridgeReservationError(`The runner slot is held by another segment`, { cause: error })
+          }
+          throw error
+        }
+        this.set(KV.bridge.generation(segment.ticketId), Math.max(latest, segment.generation))
+      }),
+      /** Every segment, newest first. */
+      list: (): BridgeSegment[] => this.values('SELECT value FROM bridge_segment ORDER BY rowid DESC'),
+      /** The segment that holds the runner slot, if any. */
+      current: (): BridgeSegment | undefined => {
+        const row = this.db.prepare('SELECT value FROM bridge_segment WHERE slot=1').get()
+        return row ? JSON.parse(String(row.value)) as BridgeSegment : undefined
+      },
+    },
+    /** The durable report of a segment: what the runner observed and what the controller verified. */
+    reports: {
+      get: (segmentId: string): BridgeReport | undefined => {
+        const row = this.db.prepare('SELECT value FROM bridge_report WHERE segment=?').get(segmentId)
+        return row ? JSON.parse(String(row.value)) as BridgeReport : undefined
+      },
+      save: (segmentId: string, report: BridgeReport): void => {
+        this.db.prepare('INSERT INTO bridge_report (segment, value) VALUES (?,?) ON CONFLICT(segment) DO UPDATE SET value=excluded.value')
+          .run(segmentId, JSON.stringify(report))
+      },
+    },
+    /** The failures a run ended with, each with the action an operator must take. */
+    failures: {
+      save: (record: FailureRecord): void => {
+        const meta = record as FailureRecord & { id?: string; ticketId?: string }
+        const id = meta.id ?? randomUUID()
+        this.db.prepare('INSERT INTO bridge_failure (id, value, ticket) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, ticket=excluded.ticket')
+          .run(id, JSON.stringify(record), meta.ticketId ?? '')
+      },
+      byTicket: (ticketId: string): FailureRecord[] => this.values('SELECT value FROM bridge_failure WHERE ticket=? ORDER BY rowid', ticketId),
+    },
+    /**
+     * Reserves the single runner slot for a segment.
+     * @returns The reserved segment, or `undefined` when the segment is stale and a newer one is stored.
+     * @throws {BridgeReservationError} When another segment holds the slot; nothing is written then.
+     */
+    reserve: (segment: BridgeSegment): BridgeSegment | undefined => this.atomic(() => {
+      const stored = this.bridge.segments.get(segment.segmentId)
+      if (stored && (segment.generation < stored.generation || segment.stopEpoch < stored.stopEpoch)) return undefined
+      if ((this.get(KV.bridge.generation(segment.ticketId)) ?? 0) > segment.generation) return undefined
+      const holder = this.bridge.segments.current()
+      if (holder && holder.segmentId !== segment.segmentId) {
+        throw new BridgeReservationError(`The runner slot is held by segment ${holder.segmentId}`)
+      }
+      this.bridge.segments.save(segment)
+      return segment
+    }),
+    /** Releases the slot of a segment once it reached a terminal phase; an unfinished segment keeps it. */
+    release: (segmentId: string): void => this.atomic(() => {
+      const segment = this.bridge.segments.get(segmentId)
+      if (!segment || !TERMINAL_PHASES.has(segment.phase)) return
+      this.db.prepare('UPDATE bridge_segment SET slot=NULL, resolved=1 WHERE id=?').run(segmentId)
+    }),
+  }
+
   /** Read-only queries for management views, orchestrator tools, and source polling (see `storeReads`). */
   readonly read: ReturnType<typeof storeReads>
 

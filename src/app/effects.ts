@@ -21,8 +21,23 @@ export interface EffectPayloads {
   notice: { value: Record<string, unknown>; summary: string }
   /** Send a message for a Channel through its Source; the key is the message ID, whose receipt the Outbox keeps. */
   reply: Record<string, never>
+  /** Start the runner of a reserved bridge segment; the key is the segment ID. */
+  'prime-launch': { segmentId: string }
+  /** Stop the runner of a bridge segment; the key is the segment ID. */
+  'prime-stop': { segmentId: string; reason: string }
+  /** Reconcile the actual state of a bridge segment; the key is the segment ID. */
+  'prime-reconcile': { segmentId: string }
+  /** Deliver the verified result of a bridge segment; the key is the segment ID. */
+  'prime-deliver': { segmentId: string }
+  /** Handle a quota warning or stop of a bridge segment; the key is the segment ID. */
+  'prime-quota': { segmentId: string }
+  /** Wait for a human approval: of a manifest, or of the continuation past a gate; the key is the Ticket or segment ID. */
+  'prime-approval': { ticketId?: string; segmentId?: string }
 }
 export type EffectKind = keyof EffectPayloads
+/** The effect kinds the Prime Runner Bridge coordinator installs handlers for. */
+export type BridgeEffectKind = 'prime-launch' | 'prime-stop' | 'prime-reconcile' | 'prime-deliver' | 'prime-quota'
+  | 'prime-approval'
 interface Handler<K extends EffectKind> {
   run: (payload: EffectPayloads[K], key: string) => Promise<void>
   /** How many may run at once now; 0 holds the kind, such as while processing is paused. */
@@ -63,6 +78,28 @@ export class Effects {
       SET value = excluded.value, generation = generation + 1, attempts = 0, error = '', due = excluded.due`)
       .run(kind, key, JSON.stringify(payload), ++this.seq, this.now(), new Date(this.now()).toISOString())
     this.kick()
+  }
+  /**
+   * Queues an effect for `key` unless that key is already running; a repeated request while the effect runs is ignored,
+   * so a duplicate request never runs the effect twice.
+   * @returns Whether the effect was queued.
+   */
+  enqueueOnce<K extends EffectKind>(kind: K, key: string, payload: EffectPayloads[K]): boolean {
+    if ([...this.tasks].some(task => task.kind === kind && task.key === key)) return false
+    this.enqueue(kind, key, payload)
+    return true
+  }
+  /**
+   * Queues a bridge effect for a segment while that segment is current: an effect naming a generation older than the
+   * stored one is dropped, so a stale callback cannot start a later action.
+   * @returns Whether the effect was queued.
+   */
+  enqueueSegment(kind: BridgeEffectKind, segmentId: string, generation: number, reason = ''): boolean {
+    const segment = this.store.bridge.segments.get(segmentId)
+    if (!segment || segment.generation > generation) return false
+    if (kind === 'prime-stop') return this.enqueueOnce(kind, segmentId, { segmentId, reason })
+    if (kind === 'prime-approval') return this.enqueueOnce(kind, segmentId, { segmentId })
+    return this.enqueueOnce(kind, segmentId, { segmentId })
   }
   handle<K extends EffectKind>(kind: K, run: Handler<K>['run'], options: Options<K> = {}): void {
     if (this.handlers.has(kind)) throw new Error(`The ${kind} effects already have a handler`)
@@ -158,4 +195,14 @@ export class Effects {
       ? { state: 'error', detail: `${detail}; the last failure: ${String(row?.error)}`, at: new Date(this.now()).toISOString() }
       : { state: 'ready', detail, at: new Date(this.now()).toISOString() })
   }
+}
+
+/**
+ * Queues one bridge effect for a segment inside the caller's Store transaction; it is dispatched after the commit.
+ * A stale effect, one naming a generation older than the stored segment, is dropped, and a repeated request while the
+ * same effect is already running is ignored, so a duplicate launch, stop, reconciliation or delivery runs once.
+ * @returns Whether the effect was queued.
+ */
+export function enqueueBridgeEffect(effects: Effects, kind: BridgeEffectKind, payload: { segmentId: string; generation: number; reason?: string }): boolean {
+  return effects.enqueueSegment(kind, payload.segmentId, payload.generation, payload.reason ?? '')
 }

@@ -175,3 +175,182 @@ export const githubThreadContext: ThreadContext<unknown> = {
     return { messages: body.messages, next: body.next_resource ?? undefined, body }
   },
 }
+
+/** The GitHub account types that may appear as a commit author or signer. */
+export type GithubAccountType = 'User' | 'Bot' | 'App' | 'Unknown'
+
+/** The GitHub account behind a commit author or a verified signature. */
+export interface GithubAccount {
+  /** The immutable GitHub account ID. */
+  id: number
+  /** The account login. */
+  login: string
+  /** The account type; only `User` counts as a human. */
+  type: GithubAccountType
+}
+
+/** The verification GitHub reports for a commit signature. */
+export interface CommitVerification {
+  /** Whether GitHub reports the signature as verified. */
+  verified: boolean
+  /** Why GitHub reports that verdict, such as `valid` or `unsigned`. */
+  reason: string
+  /** The account the verified signature is bound to, when GitHub binds it to one. */
+  signer?: GithubAccount
+}
+
+/** One file a commit changed, with the lines it added and removed. */
+export interface ChangedFile {
+  /** The repository-relative path of the file. */
+  path: string
+  /** The lines the commit added, without the diff marker. */
+  added: string[]
+  /** The lines the commit removed, without the diff marker. */
+  removed: string[]
+}
+
+/** The evidence of one commit, as the bridge's approval protocol reads it. */
+export interface CommitEvidence {
+  /** The full commit SHA. */
+  sha: string
+  /** The full SHA of the commit's parent. */
+  parent: string
+  /** The account that authored the commit. */
+  author: GithubAccount
+  /** The account that committed it; GitHub's web-flow account for an edit made in the browser. */
+  committer: { login: string }
+  /** The verification GitHub reports for the commit's signature. */
+  verification: CommitVerification
+  /** The files the commit changed. */
+  changed: ChangedFile[]
+  /** The commit the branch head points at, when the caller read it. */
+  head?: string
+}
+
+const AccountSchema = z.looseObject({ login: z.string(), id: z.number(), type: z.string().nullish() })
+const VerificationSchema = z.looseObject({ verified: z.boolean().nullish(), reason: z.string().nullish() })
+const CommitFileSchema = z.looseObject({ filename: z.string(), patch: z.string().nullish() })
+const CommitSchema = z.looseObject({
+  sha: z.string(),
+  parents: z.array(z.looseObject({ sha: z.string() })).nullish(),
+  author: AccountSchema.nullish(),
+  committer: z.looseObject({ login: z.string() }).nullish(),
+  commit: z.looseObject({ verification: VerificationSchema.nullish() }),
+  files: z.array(CommitFileSchema).nullish(),
+})
+
+/** Maps a GitHub account type to the four types the bridge distinguishes; an absent type is unknown. */
+function accountType(raw: string | null | undefined): GithubAccountType {
+  if (raw === 'User') return 'User'
+  if (raw === 'Bot') return 'Bot'
+  if (raw === 'App') return 'App'
+  return 'Unknown'
+}
+
+/** Splits a unified diff patch into the lines it added and the lines it removed. */
+function patchLines(patch: string | null | undefined): { added: string[]; removed: string[] } {
+  const added: string[] = []
+  const removed: string[] = []
+  for (const line of (patch ?? '').split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) added.push(line.slice(1))
+    else if (line.startsWith('-') && !line.startsWith('---')) removed.push(line.slice(1))
+  }
+  return { added, removed }
+}
+
+/**
+ * Reads one commit and the evidence the approval protocol needs: its parent, its author, its signature verification, and
+ * the lines it changed. A signature is bound to an account only when GitHub verifies it as a web edit signed on behalf
+ * of that account; a generic verified badge binds no account.
+ */
+export async function readCommit(commands: Commands, sha: string): Promise<CommitEvidence> {
+  const commit = await commands.api(CommitSchema, `commits/${sha}`)
+  const author = { id: commit.author?.id ?? 0, login: commit.author?.login ?? 'ghost', type: accountType(commit.author?.type) }
+  const verification = commit.commit.verification ?? {}
+  const verified = verification.verified === true
+  const webEdit = verified && commit.committer?.login === 'web-flow'
+  return {
+    sha: commit.sha,
+    parent: commit.parents?.[0]?.sha ?? '',
+    author,
+    committer: { login: commit.committer?.login ?? '' },
+    verification: { verified, reason: verification.reason ?? 'unknown', ...webEdit ? { signer: author } : {} },
+    changed: (commit.files ?? []).map(file => ({ path: file.filename, ...patchLines(file.patch) })),
+  }
+}
+
+/** One comment as the approval protocol re-reads it. */
+export interface GithubCommentEvidence {
+  /** The comment's ID. */
+  commentId: string
+  /** The comment's current body. */
+  body: string
+  /** The account that wrote the comment. */
+  actor: GithubAccount
+  /** The comment's last update time. */
+  at: string
+}
+
+/**
+ * Reads the commit a branch head points at, so the controller can confirm that a gate commit is still the branch head
+ * and that nothing was pushed after it.
+ */
+export async function readBranchHead(commands: Commands, branch: string): Promise<string | undefined> {
+  const ref = await commands.api(z.looseObject({ object: z.looseObject({ sha: z.string() }).nullish() }).nullish(),
+    `git/ref/heads/${encodeURIComponent(branch)}`)
+  return ref?.object?.sha
+}
+
+/**
+ * Re-reads one Issue or PR conversation comment and its current actor, so an approval is checked against the comment as
+ * it stands now rather than as the caller last saw it.
+ */
+export async function readComment(commands: Commands, number: number, commentId: string): Promise<GithubCommentEvidence | undefined> {
+  const comment = await commands.api(z.looseObject({
+    id: z.number(), body: z.string().nullish(),
+    user: z.looseObject({ login: z.string(), id: z.number().nullish(), type: z.string().nullish() }).nullable(),
+    updated_at: z.string().nullish(), created_at: z.string().nullish(),
+  }), `issues/${number}/comments/${commentId}`)
+  if (!comment.user) return undefined
+  return {
+    commentId: String(comment.id),
+    body: comment.body ?? '',
+    actor: { id: comment.user.id ?? 0, login: comment.user.login, type: accountType(comment.user.type) },
+    at: comment.updated_at ?? comment.created_at ?? '',
+  }
+}
+
+/** The branch protection rules GitHub reports for one branch. */
+export interface BranchProtection {
+  /** The protected branch's name. */
+  branch: string
+  /** Whether a pull request with enough reviews is required before merging. */
+  requiresReviews: boolean
+  /** Whether the rule applies to administrators as well. */
+  enforceAdmins: boolean
+  /** The number of approvals the rule demands. */
+  requiredApprovals: number
+  /** The names of the status checks the rule demands. */
+  requiredChecks: string[]
+}
+
+/**
+ * Reads the protection rules of one branch, so the controller can prove before launch that its own identity cannot merge.
+ */
+export async function readBranchProtection(commands: Commands, branch: string): Promise<BranchProtection> {
+  const protection = await commands.api(z.looseObject({
+    required_pull_request_reviews: z.looseObject({
+      required_approving_review_count: z.number().nullish(),
+      enforce_admins: z.boolean().nullish(),
+    }).nullish(),
+    required_status_checks: z.looseObject({ contexts: z.array(z.string()).nullish() }).nullish(),
+  }), `branches/${encodeURIComponent(branch)}/protection`)
+  const reviews = protection.required_pull_request_reviews
+  return {
+    branch,
+    requiresReviews: !!reviews,
+    enforceAdmins: reviews?.enforce_admins === true,
+    requiredApprovals: reviews?.required_approving_review_count ?? 0,
+    requiredChecks: protection.required_status_checks?.contexts ?? [],
+  }
+}

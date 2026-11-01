@@ -398,6 +398,21 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/client/client.css`, `css.d.ts` | The panel's stylesheet, loaded as text |
 
 `src/sources/github.ts` and `src/sources/feishu.ts` are also the entries of the two Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the three plugins, with Feishu disabled.
+| `src/executor/prime-model.ts` | The bridge's record types: the approved manifest, its approval, a run segment, the runner's report, and the controller's verification of it |
+| `src/executor/prime-manifest.ts` | RFC 8785 canonical JSON, the manifest's strict schema, its digest, and the builder that reads a feature at one baseline |
+| `src/executor/prime-tasks.ts` | The accepted task grammar and the comparator that tells authorized progress from a scope change |
+| `src/app/prime-approval.ts` | The approval protocol: the exact run approval comment, the allowlist and policy revalidation, and the verified human gate commit and its bound decision |
+| `src/executor/prime-preflight.ts` | The preflight: the Prime CLI, its flags, the skill expansion, the interpreter, the checks, the confinement, the monitor, and the environment |
+| `src/infra/prime-isolation.ts` | The containment adapter: the isolation plan, the bubblewrap argument vector, the deterministic identities, the containment probes, and the artifact collection |
+| `src/executor/prime-supervisor.ts` | The supervisor over that adapter: the launch, the stop with its empty-cgroup proof, the quiescence, and the cleanup |
+| `src/executor/prime-quota.ts` | The quota guard: the guard script's contract, the watcher, the durable alert, the emergency stop, and the cleanup of the run's own resources |
+| `src/executor/prime-report.ts` | The runner's report as untrusted data: its strict schema, the redaction, the distinct failure causes, and the notice text |
+| `src/executor/prime-verify.ts` | The controller's own verification: the workspace snapshot, the scope audit, the result revision, the rerun of the checks, and the convergence assessment |
+| `src/executor/prime-gate.ts` | The human gate protocol: the bounded segment, the question, the durable evidence, and the separately bounded next segment |
+| `src/executor/prime-delivery.ts` | The delivery: the pull request, the expected-old-SHA push lease, the branch protection and auto-merge refusals, and the retained unknown outcome |
+| `src/executor/prime-bridge.ts` | The coordinator: the single runner reservation, the launch, the stop epoch, the reconciliation, the verification, and the delivery |
+| `src/app/prime-service.ts` | The composition of the bridge: the adapters over the Store, the Effects queue, the command line, and the ticket surface |
+| `src/executor/prime-recovery.ts` | The reconciliation and publication policy: what the controller does with a segment it finds after a restart, and the fence that stops a late callback |
 
 ## Tests
 
@@ -432,6 +447,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/timeline.spec.ts` | A Thread's pages and a Trigger's neighbours by time and then id, with every received Trigger's time in one form |
 | `tests/migration.spec.ts` | The schema 11 migration: every stored record in its current shape, and the refusal of older schemas |
 | `tests/store.spec.ts` | Repositories and their working sets, in SQLite as in memory, the kv area, with every key of `KV` spelled only in `src/kv.ts` and the migration, settings history and queries |
+| `tests/prime-store.spec.ts` | The bridge records in the Store: the single runner reservation and its release, the durable approvals, reports and failures, and the bridge effects |
 | `tests/prompts.spec.ts` | Prompt validation, assembly and versions |
 | `tests/cards.spec.ts` | The rules the built-in text must state, file by file |
 | `tests/model-surface.spec.ts` | Everything models read: tools, prompts, skills and inputs, checked against the tool schemas, the execution environment and the glossary, within a size budget per role |
@@ -446,6 +462,21 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/docs.spec.ts` | Numbered documents link only to earlier ones, every local link resolves, no document has merge conflict markers, and this document's tables list every module and every test |
 
 `tests/fixtures/` holds what several tests share: `host.ts`, a simulated DeepSeek Harness host; `panel-server.ts` and `panel.tsx`, the fake management API and the panel around a page; `deployment.ts`, a resolved deployment; `git.ts`, the environment of every git the tests start, which names no repository; and `async.ts`.
+| `tests/prime-manifest.spec.ts` | The canonical JSON, the manifest's strict schema and digest, and the pinned fixture digests |
+| `tests/prime-tasks.spec.ts` | The task grammar, the progress comparator, and the scope changes it refuses |
+| `tests/prime-store.spec.ts` | The bridge records in the Store: the single runner reservation and its release, the durable approvals, reports and failures, and the bridge effects |
+| `tests/prime-isolation.spec.ts` | The isolation plan, the argument vectors, the containment probes, the quiescence verdicts, and the artifact collection |
+| `tests/prime-quota.spec.ts` | The quota guard: its explicit identity, the thresholds, the fail-closed accounting, the emergency stop, and the cleanup |
+| `tests/prime-approval.spec.ts` | The run approval: the exact comment form, the allowlist, the policy, the edited comment, and the revoked approver |
+| `tests/prime-gate-approval.spec.ts` | The human gate: the verified signer, the one-checkbox diff, the bound decision, and every wrong variant |
+| `tests/prime-preflight.spec.ts` | The preflight: each failed prerequisite, the unsupported flag, the unapproved write, and the evidence without secrets |
+| `tests/prime-result.spec.ts` | The report as untrusted data, the redaction, the scope audit, the rerun of the checks, and the convergence rounds |
+| `tests/prime-delivery.spec.ts` | The delivery: one pull request, the push lease, the auto-merge and branch protection refusals, and the unknown outcome |
+| `tests/prime-human-gate.spec.ts` | The gate: the untouched later tasks, the question, the durable evidence, the draft, and the events that never approve a gate |
+| `tests/prime-failures.spec.ts` | The distinct failure causes, their evidence, their next action, and the secret redaction |
+| `tests/prime-stop.spec.ts` | The stop: its durable intent with the Ticket's end, the stop epoch, the fence of a late callback, and the reservation a stop keeps |
+| `tests/prime-recovery.spec.ts` | The recovery: the segments the controller holds, the identity it may not establish, and the reservation it keeps until an operator resolves it |
+| `tests/prime-publication-race.spec.ts` | The publication race: an unknown, delayed, or lease-refused remote outcome, and the one pull request a segment owns |
 
 ## Persistence
 

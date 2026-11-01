@@ -198,6 +198,73 @@ Sources keep recording Triggers, and a running Executor turn is not interrupted.
 A person's message to an ended Ticket waits: the first pass after the pause resumes the Ticket, if its Mandate holds under the Policy then.
 
 An Eval in progress does not expire during a pause; its deadline moves later by the pause's length.
+## The Prime Runner Bridge
+
+The bridge connects one authorized Ticket to one Prime Agent runner that works on an
+already approved specification. It is off by default: no run starts until an operator
+approves one exact manifest.
+
+### What the bridge enforces, and what it only instructs
+
+The enforced controls are the writable paths of the run, the process boundary around the
+runner, the network the runner may use, the credentials it may read, and the stop
+behaviour. The task order inside an allowed path is only instructed: when a task boundary
+cannot be held, the segment stops for a human decision and the report says so.
+
+### The manifest and the approval
+
+Before a run starts, the controller builds a manifest of the feature at one baseline: the
+exact bytes of the specification, the plan, the task list, the constitution, the repository
+guidance, and the hook configuration, the writable paths, the checks, and the environment
+with its credential categories. The manifest is hashed with RFC 8785 canonical JSON, and
+the digest is what a person approves:
+
+```text
+@<agent> APPROVE RUN <manifest-sha256>
+```
+
+The controller re-reads the comment, the account, the allowlist, the policy, and the
+manifest before the launch, before every continuation, and before the delivery. A changed
+manifest, an edited comment, a revoked allowlist entry, or a bot account blocks the run.
+
+### The human gate
+
+A gate is a task a person completes. The runner stops before it and leaves it unchecked.
+The reviewer makes exactly one `[ ]` to `[x]` change on the gate line with a GitHub
+verified edit, and approves the continuation:
+
+```text
+@<agent> APPROVE GATE <gate-id> <manifest-sha256> <full-gate-commit>
+```
+
+The commit must be verified and bound to the same allowlisted human who approves the
+continuation. A generic verified badge, a bot, a wrong parent, a second changed line, or
+an edited marker blocks the continuation. A draft pull request may present the evidence;
+it never marks the Ticket or the feature ready.
+
+### Stop and recovery
+
+Ending the Ticket records the stop intent and the stop epoch in the same transaction, so
+a restart still stops the runner. Only an empty cgroup proves the stop; an unconfirmed
+stop keeps the reservation, the quota guard, and the operator's attention. After a
+restart the controller reconciles the segment's identity, the runner, the workspace, the
+guard, the report, and the remote state before it launches or publishes anything. An
+unknown state blocks a replacement until an operator resolves it.
+
+### The quota guard
+
+Each run owns one external cron guard that reads the accounting source itself and stops
+only that run's cgroup. The guard measures one scope, such as the session's token count;
+it never establishes an account-wide billed quota, and it may overshoot a threshold
+between two readings. An unreadable accounting source fails closed.
+
+### Delivery
+
+The controller, not the runner, creates or updates the pull request. The push uses an
+expected-old-SHA lease, so a head that changed is never overwritten. The controller never
+merges and never enables auto-merge; a pull request that already has auto-merge enabled
+blocks until a human resolves it. The merge stays a human decision.
+
 ### Invalid configuration
 
 A stored Source configuration that its kind rejects disables that Source instance.

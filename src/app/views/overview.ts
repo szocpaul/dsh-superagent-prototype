@@ -65,11 +65,23 @@ export function overview(host: ViewHost, health: HealthMap, policyVersionValue: 
       attempts: item.attempts, error: item.error } })),
   ]
   const open = store.tickets.open().sort(newestFirst)
+  // The bridge runs that still hold the runner slot or wait for an operator, including those of ended Tickets.
+  const bridge = store.bridge.segments.list()
+    .filter(segment => !['stopped', 'ready', 'blocked', 'failed'].includes(segment.phase))
+    .map(segment => ({
+      ticketId: segment.ticketId,
+      title: store.tickets.get(segment.ticketId)?.title ?? segment.ticketId,
+      phase: segment.phase,
+      stop: segment.stopRequested ? 'requested' : 'none',
+      reason: store.bridge.failures.byTicket(segment.ticketId).at(-1)?.summary ?? '',
+      updatedAt: segment.updatedAt,
+    }))
   const stats = Object.values(store.read.triggerStats(since))
   const received = stats.reduce((sum, item) => sum + item.received, 0), filtered = stats.reduce((sum, item) => sum + item.filtered, 0)
   const judgement = store.read.flow(since)
   return {
     problems,
+    bridge,
     person: open.filter(ticket => ticketStage(ticket).stage === 'person').map(ticket => ticketRow(view, ticket)),
     executor: { ...load, maxWorkers: settings.executor.maxWorkers, idle: open.filter(ticket => ticketStage(ticket).stage === 'idle').length },
     flow: { received, filtered, triggers: received - filtered, judged: judgement.judged, accepted: judgement.accepted,

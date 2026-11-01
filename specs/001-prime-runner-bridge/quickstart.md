@@ -20,6 +20,43 @@ service and GitHub operations only with operator approval in a disposable enviro
   Prepare one no-gate scenario and one distinct manual-gate scenario. No fixture or
   production repository should be modified by these instructions before review.
 
+## 0. Verified local prerequisites (2026-11-01)
+
+The tool versions and the existing check commands of this repository were read without
+installing, changing, or launching anything, and without a backend call.
+
+| Tool | Version |
+|------|---------|
+| Node | v24.21.0 |
+| pnpm | 11.7.0 |
+| TypeScript | 6.0.3 (from `package.json`) |
+| Vitest | 4.1.8 (from `package.json`) |
+| git | 2.53.0 |
+| GitHub CLI | 2.46.0 |
+| tmux | 3.6 |
+| bubblewrap | 0.11.1 |
+| systemd | 259 |
+| Prime Agent CLI | 0.10.1 |
+| Python | 3.14.4 |
+| Kernel | 7.0.0-38-generic |
+
+The repository's existing commands, unchanged by this feature:
+
+```sh
+pnpm exec vitest run tests/prime-<name>.spec.ts   # one focused bridge suite
+pnpm exec vitest run tests/prime-*.spec.ts        # every bridge suite
+pnpm typecheck                                    # tsc --noEmit
+pnpm test                                         # vitest run
+pnpm build                                        # tsdown
+pnpm check                                        # typecheck, then test, then build
+```
+
+`pnpm check` is the full check; a focused suite is not a substitute for it. The host
+already runs unrelated cron entries, so the bridge's quota guard must own exactly one
+entry of its own and remove only that one. `bwrap` is the verified isolation binary on
+this host (see [runtime-report.md](runtime-report.md)); raw unprivileged user namespaces
+are denied by AppArmor here.
+
 ## 1. Run existing checks
 
 Dependencies install with the committed lockfile:
@@ -115,6 +152,55 @@ Use external non-LLM monitoring; do not create a Prime heartbeat for quota check
 6. Verify report, evidence, review comments and documented cleanup. Independently
    confirm run-owned service, daemon, cron entry, and temporary workspace are disposed
    only after verified stop; do not touch unrelated sessions or cron entries.
+
+## 5. Implemented local commands
+
+The bridge is implemented and covered by focused suites; the commands below are the ones
+that exist in this repository now.
+
+```sh
+pnpm exec vitest run tests/prime-*.spec.ts   # every bridge suite (269 tests)
+pnpm exec vitest run tests/prime-store.spec.ts tests/prime-isolation.spec.ts tests/prime-quota.spec.ts
+pnpm typecheck                               # tsc --noEmit
+pnpm check                                   # typecheck, then test, then build
+sh -n scripts/prime-quota-guard.sh           # the guard script's syntax
+```
+
+The bridge's own modules are `src/executor/prime-*.ts` (the manifest, the tasks, the
+approval, the preflight, the isolation supervisor, the quota guard, the report, the
+verification, the gate, the delivery, the coordinator, and the recovery policy),
+`src/app/prime-approval.ts` and `src/app/prime-service.ts` (the approval protocol and the
+composition), and `src/infra/prime-isolation.ts` (the containment adapter). The
+disposable fixtures are in `tests/fixtures/prime-bridge/`, and the fake host the
+coordinator tests share is `tests/fixtures/prime-bridge-host.ts`.
+
+The quota guard is installed per run as one cron entry of its own and is removed only
+after a confirmed stop. Its script takes the run's identity as arguments:
+
+```sh
+scripts/prime-quota-guard.sh --session <file> --log <file> --warn <tokens> --stop <tokens> \
+  --alert <file> --cgroup <dir> -- <accounting command>
+```
+
+Cleanup of a run's own resources (guard entry, service unit, daemon socket, tmux server,
+and workspace scratch) happens only after the stop is confirmed and the cgroup is proven
+empty; the code refuses it otherwise.
+
+### Operator authorization still required
+
+Nothing below is run by the tests, and none of it may run without the operator's
+separate authorization:
+
+- any live model or backend call (the preflight's backend smoke needs
+  `DSH_PRIME_BACKEND_SMOKE` to be configured, and it blocks the launch while it is not);
+- any GitHub write, including the pull request, the push, and the branch protection
+  check;
+- the disposable end-to-end smoke (task T054), which is a MANUAL GATE;
+- the real containment run of section 3, which needs the operator's approval of the
+  environment.
+
+The tests use fakes for GitHub, the runner, the clock, the quota accounting, and the
+cgroup, so the suite never touches the network.
 
 ## Evidence to retain
 

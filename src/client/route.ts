@@ -16,6 +16,8 @@ export type Route = { page: 'overview' | 'source'; id?: undefined; query?: undef
   | { page: 'execution'; id: string; query?: undefined }
   | { page: 'settings'; id?: undefined; query: { group: SettingsGroup; source?: string; version?: string } }
 export const HOME: Route = { page: 'overview' }
+/** The execution page of the Ticket a bridge run belongs to. */
+export const bridgeRoute = (ticketId: string): Route => ({ page: 'execution', id: ticketId })
 export const settingsRoute = (group: SettingsGroup, query: { source?: string; version?: string } = {}): Route =>
   ({ page: 'settings', query: { group, ...query } })
 export const setupPage = (place: SetupPlace): Route =>

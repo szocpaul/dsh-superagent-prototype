@@ -18,6 +18,55 @@ Opening a blank managed Session in the Web UI can select the profile's default p
 
 Both presets run with `danger-full-access` as the operator's OS user and read messages from subscribed Threads. Account wrappers choose the agent's credentials by default; they do not isolate the process. A worker can execute programs by path and read the operator's home directory. For isolation, use a dedicated OS account containing only the agent's credentials.
 
+### The Prime Runner Bridge
+
+The bridge runs one Prime Agent runner for an authorized Ticket. It stays disabled
+unless the deployment provides what it needs.
+
+#### Permissions and isolation
+
+The runner runs in its own user service with a delegated cgroup, a private Prime daemon
+socket, and a private tmux server, inside a bubblewrap sandbox with a private `/proc`, a
+masked home directory, and a masked host `/tmp`. Only the approved writable paths are
+writable; the checkout is read-only. The runner has no GitHub write credentials, and the
+controller's publishing account is kept without merge or bypass rights by a
+server-enforced branch protection rule. A repository write permission alone is not
+enough.
+
+The isolation contains the runner's mistakes; it is not a privilege boundary against an
+operator account that holds passwordless root on the host.
+
+#### Accounts and the allowlist
+
+The controller acts through a dedicated agent account with push access only, and the
+person who approves and merges acts with their own account. The GitHub Source drops the
+agent account's own messages, so the separation is required by the Source, not only by
+the audit trail. The accounts that may approve a run are the ones on the GitHub Source's
+allowed list.
+
+#### Human gate
+
+A gate is completed by a person, with a GitHub verified edit bound to their own account.
+The controller never ticks a gate, and a pull request review, a bot comment, or a run
+report is never an approval.
+
+#### Stop and recovery
+
+Ending the Ticket stops the runner and records the stop with the Ticket's end. An
+unconfirmed stop keeps the reservation and the quota monitoring, and the operator sees
+the unresolved state in the panel, also for an ended Ticket.
+
+#### Quota limitations
+
+The quota guard of a run measures one scope and reports it. It is a warning and a stop
+threshold for that scope, not a guarantee about the provider's billed account total, and
+the run can pass a threshold between two readings.
+
+#### Manual merge
+
+The controller never merges a pull request and never enables auto-merge. The merge is a
+human decision in GitHub.
+
 ## Prerequisites
 
 - Node.js 22.19+ or 24+, pnpm, git 2.32+, Python 3.8+ and tmux

@@ -26,6 +26,10 @@ export const agentPull = (pr: { user: { login: string }; head?: { repo?: { full_
 /** True when a branch belongs to the ticket: its last path segment is the ticket's short name, such as `agent/<name>`. */
 export const ticketBranch = (ticket: Pick<Ticket, 'execution'>, ref: string): boolean =>
   !!ticket.execution?.name && ref.split('/').at(-1) === ticket.execution.name
+/** True when the PR has auto-merge enabled on the server. */
+export const autoMergeEnabled = (pr: { auto_merge?: unknown }): boolean => pr.auto_merge != null
+/** True when the PR is still open and not merged. */
+export const pullIsOpen = (pr: { state: string; merged?: boolean }): boolean => pr.state === 'open' && !pr.merged
 const AUTO_MERGE_ON: ThreadFact = { label: { zh: '自动合并', en: 'Auto-merge' }, value: { zh: '已开启', en: 'on' } }
 
 /**
@@ -64,7 +68,7 @@ export async function observePull(ctx: SourceContext, pr: Pull): Promise<boolean
     const reopened = ticket?.follows?.some(item => item.thread === `${SOURCE}:${pr.number}` && item.closed)
     if (ticket && (reopened || pullsOf(ticket, true).every(number => number === pr.number))) claimPull(ctx, ticket.id, pr)
   }
-  ctx.threads.describe(`github:${pr.number}`, { facts: { autoMerge: !ended && pr.auto_merge != null ? AUTO_MERGE_ON : null } })
+  ctx.threads.describe(`github:${pr.number}`, { facts: { autoMerge: !ended && autoMergeEnabled(pr) ? AUTO_MERGE_ON : null } })
   return ended
 }
 function bind(ctx: SourceContext, ticketId: string, pr: Pull, own: boolean): void {

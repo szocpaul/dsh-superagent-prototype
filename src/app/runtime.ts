@@ -46,6 +46,13 @@ import { sourceContextOf, type SourceContextDeps } from './source-context.ts'
 import type { ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
 import { executorTools, type ExecutorToolsHost } from './tools/executor.ts'
+import { PrimeBridge, type VerifyPort } from '../executor/prime-bridge.ts'
+import { createDeliveryLedger } from '../executor/prime-delivery.ts'
+import { PrimeSupervisor } from '../executor/prime-supervisor.ts'
+import { localIsolationRunner } from '../infra/prime-isolation.ts'
+import type { ApprovedManifest } from '../executor/prime-model.ts'
+import { allowlistOf, createPrimeBridge, deliveryAdapter, hostPreflightHost, hostRunEnvironment, manifestKey,
+  quotaAdapter, requestRun, runnerAdapter, type PrimeServiceDeps } from './prime-service.ts'
 
 // Source plugins interact with dsh-superagent exclusively through the `SourceHost` service interface.
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
@@ -69,6 +76,10 @@ export class Runtime extends Service implements SourceHost {
   readonly assessor: MasterAssessor
   readonly outbox: Outbox
   readonly engine: Engine
+  /** The Prime Runner Bridge coordinator; it is absent while the deployment has no approved bridge environment. */
+  bridge?: PrimeBridge
+  /** The bridge's dependencies, which the executor tools use to prepare a run request. */
+  primeDeps?: PrimeServiceDeps
   readonly passes: Passes
   readonly ready: Promise<void>
   private readonly board = new HealthBoard()
@@ -127,7 +138,8 @@ export class Runtime extends Service implements SourceHost {
         sourceHost: this, setup, requestPass: () => { this.passes.request() } })
       this.executor = new DshExecutor({ context: ctx, get engine() { return runtime.engine }, store, effects, health: board.claim('worker'), machine,
         lifetime: this.lifetime, sessions, closing: () => this.closing(), paused: () => this.paused(), environment, sourceLink: link,
-        repliedTo: trigger => repliedTo({ store, sources }, trigger) })
+        repliedTo: trigger => repliedTo({ store, sources }, trigger),
+        get bridge() { return runtime.bridge } })
       this.assessor = new MasterAssessor({ get engine() { return runtime.engine }, commands, get deployment() { return setup.deployment }, effects,
         settings: () => store.settings(), paused: () => this.paused(), threadContext: trigger => sources.threadContext(trigger),
         deliver: (id, text) => sessions.prompt(masterId, id, text, 'steer'), candidateCard: candidate => candidateCard(links, candidate) })
@@ -162,7 +174,14 @@ export class Runtime extends Service implements SourceHost {
       this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
         get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
+        prime: { request: async (ticketId: string, featureDir: string) => {
+          const deps = runtime.primeDeps
+          if (!deps) throw new Error('The Prime bridge is not installed in this deployment')
+          const { digest } = await requestRun(deps, ticketId, featureDir)
+          return { digest }
+        } },
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
+      this.bridge = this.createBridge()
       this.ready = this.initialize()
     } catch (error) {
       // Release the database and state lock if initialization fails so an in-process restart can reacquire them.
@@ -198,6 +217,49 @@ export class Runtime extends Service implements SourceHost {
   private closing(): boolean { return this.closingFlag }
   /** Hold evaluation, dispatch, and outbound delivery while paused or awaiting setup; sources still record incoming triggers. */
   private paused(): boolean { return !this.setup.configured() || this.store.settings().paused }
+  /** Assembles the bridge coordinator with its adapters; it stays disabled while no environment is approved. */
+  private createBridge(): PrimeBridge | undefined {
+    const runtime = this
+    const ledger = createDeliveryLedger()
+    const deps: PrimeServiceDeps = {
+      store: this.store,
+      effects: this.effects,
+      report: (ticketId, report) => this.engine.report(ticketId, report),
+      send: message => { this.outbox.send(message) },
+      settings: () => this.store.settings(),
+      deployment: () => this.setup.deployment,
+      commands: () => this.commands,
+      repositoryRoot: () => process.cwd(),
+      environment: () => ({
+        deploymentId: this.machine.stateDir,
+        runner: { cli: 'prime-agent', version: process.env.DSH_PRIME_VERSION ?? '0.10.1' },
+        model: { provider: process.env.DSH_PRIME_PROVIDER ?? 'unknown', id: process.env.DSH_PRIME_MODEL ?? 'unknown' },
+        isolation: { backend: 'bubblewrap', writablePaths: [], network: 'none', allowedEndpoints: [] },
+        credentials: process.env.DSH_PRIME_CREDENTIALS?.split(',').map(item => item.trim()).filter(Boolean) ?? [],
+        quota: { warnTokens: Number(process.env.DSH_PRIME_WARN_TOKENS ?? 0), stopTokens: Number(process.env.DSH_PRIME_STOP_TOKENS ?? 0),
+          maxWallMs: Number(process.env.DSH_PRIME_MAX_WALL_MS ?? 0), meteringScope: 'session' },
+      }),
+      manifests: () => this.store.tickets.list()
+        .map(ticket => this.store.get(manifestKey(ticket.id)))
+        .filter((manifest): manifest is ApprovedManifest => manifest !== undefined),
+      now: () => new Date().toISOString(),
+    }
+    void runtime
+    this.primeDeps = deps
+    return createPrimeBridge(deps, {
+      preflightHost: () => hostPreflightHost(deps),
+      runner: () => runnerAdapter(new PrimeSupervisor(localIsolationRunner, hostRunEnvironment())),
+      verify: () => runtime.verifyAdapter(),
+      delivery: () => deliveryAdapter(deps, ledger),
+      quota: () => quotaAdapter(deps),
+    })
+  }
+  /** The verification adapter of the bridge; a run whose verification cannot run stays blocked. */
+  private verifyAdapter(): VerifyPort {
+    return {
+      verify: async () => { throw new Error('The bridge verification is not installed yet, so the run stays blocked') },
+    }
+  }
   private async initialize(): Promise<void> {
     // Register management HTTP routes before setup completes so operators can fix setup problems in the UI.
     this.disposers.push(registerHttp(this.ctx, this.httpHost()))
@@ -214,6 +276,9 @@ export class Runtime extends Service implements SourceHost {
     this.executor.resume()
     this.passes.start()
     this.effects.start()
+    this.bridge?.install()
+    // The bridge reconciles the segments it finds before any launch effect may dispatch.
+    this.bridge?.reconcileOpenSegments()
     this.runtimeHealth.set({ state: 'ready', detail: 'Orchestrator is ready', at: now() })
   }
   private httpHost(): HttpHost {

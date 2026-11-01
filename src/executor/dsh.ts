@@ -79,6 +79,11 @@ export interface ExecutorHost {
   sourceLink(trigger: Trigger, signal?: AbortSignal): Promise<{ source_url?: string; source_url_read?: string }>
   /** Stored Trigger of the message `trigger` replies to, when it replies to one. */
   repliedTo(trigger: Trigger): Trigger | undefined
+  /**
+   * The bridge's durable stop hook, called inside the Ticket-ending transaction so the stop epoch and the stop effect
+   * are committed with the Ticket's end. It is absent when the bridge is not installed.
+   */
+  bridge?: { requestStop(ticketId: string, reason: string): void }
 }
 /** Looks up a ticket's origin trigger in Store. */
 export const sourceTrigger = (host: { store: Pick<Store, 'triggers'> }, ticket: Ticket): Trigger | undefined =>
@@ -355,6 +360,8 @@ export class DshExecutor implements Executor {
    * report with no Input delivered since, and stops its shell jobs and subagents, including jobs it left to a person.
    */
   stop(ticket: Ticket, assignment: Assignment, reason: string): void {
+    // The bridge's stop intent is committed with the Ticket's end, so a restart still stops the runner.
+    this.host.bridge?.requestStop(ticket.id, reason)
     this.transient.delete(assignment.id); this.transient.delete(`launch:${assignment.id}`)
     const report = assignment.report
     const busy = !!assignment.deliveredAt && !!report && assignment.deliveredAt >= report.at

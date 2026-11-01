@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { usePoll, type Problem } from './api.ts'
 import { Button, Icon } from './controls.tsx'
 import { useAction, usePanel, usePanelData } from './provider.tsx'
-import { setupPage, settingsRoute, type Route } from './route.ts'
+import { bridgeRoute, setupPage, settingsRoute, type Route } from './route.ts'
 import { TicketLine } from './rows.tsx'
 import { healthText, localized, reasonLabel, valueLabel, readableMarkers } from './text.ts'
 import { CheckSetupButton, ConfirmButton, Hint, LoadState, Section, SetupMessage } from './widgets.tsx'
@@ -80,6 +80,16 @@ export function OverviewPage() {
     {data.problems.length > 0 && <Section title={t('problems')} count={data.problems.length}>
       <ul className="dt-list dt-cards">{data.problems.map((problem, index) => <ProblemLine key={index} problem={problem}
         onChanged={reload} />)}</ul>
+    </Section>}
+    {data.bridge.length > 0 && <Section title={t('primeRuns')} count={data.bridge.length}>
+      <ul className="dt-list dt-cards">{data.bridge.map(run => <li key={`${run.ticketId}-${run.updatedAt}`} className="dt-row dt-link">
+        <div className="dt-row-main">
+          <div className="dt-att-what"><button type="button" className="dt-open dt-open-wrap"
+            onClick={() => navigate(bridgeRoute(run.ticketId))}>{run.title}</button></div>
+          <p className="dt-clamp">{t('primeRunState', { phase: run.phase, stop: run.stop })}</p>
+          {run.reason && <p className="dt-clamp">{run.reason}</p>}
+        </div>
+      </li>)}</ul>
     </Section>}
     <Section title={t('lastDay')} action={more({ page: 'trigger', query: { filter: 'recent' } })}>
       {/* Received and evaluated counts operate on Triggers rather than Threads or Decisions, so they do not link to filtered views. */}

@@ -1,0 +1,11 @@
+{
+  "tasks-no-gate.md": "00cd71ce9b60edc4ecbb75f7fc84f7bdfcd99119e4048f6cf92a33003500a342",
+  "tasks-gate.md": "d34a1643c1cd7f6e45d688a2ba966e1f2739408c513ca7aa2ff2e236b94bc4fa",
+  "tasks-ambiguous.md": "dc8c1bd503cf2a0a15c65cde0f280802b89812ba71e27c4e8822d50d7912d31a",
+  "tasks-unparsable.md": "409e16790578ec33e60ec9ceb2ef1d2d66965fe1e5d982eb397e462f90efddfd",
+  "baseline-spec.md": "c5732ceeacfcb14cab190fa5e826110859e291d011f909e1bf63d45aa5d5dd3c",
+  "baseline-plan.md": "bd2553c5a5f40176b42a80ebfbdb8a47007c7372c5b737bc22cb6d34c87bf3f3",
+  "guidance.md": "5bb0cb76220da3ac2c8db5fa9ad203492d22969ddad0448af665592ac05d32d2",
+  "hooks.yml": "37b956b60eb23ff35f74095f38ad3138c53c634fbbf62c6008bd626451f54680",
+  "check.sh": "bdc83fb390b8628f36f704a1e1283cc316a55050d9aff926a5d3571ad7e6b4d6"
+}

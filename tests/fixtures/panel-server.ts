@@ -180,6 +180,7 @@ const overviewView = (): ApiResponse<'GET overview'> => {
   const { problem, feishuProblem } = server.setup
   const setup = problem ?? feishuProblem
   return {
+    bridge: [],
     problems: [...setup ? [{ kind: 'setup' as const, ...setup }] : [],
       ...KINDS.some(kind => server.settings.sources[kind.kind]?.enabled !== false) ? [] : [{ kind: 'no-source' as const }],
       ...feishuProblem || server.settings.sources.feishu?.enabled === false ? [] : [{ kind: 'source-error' as const, source: { id: 'feishu',

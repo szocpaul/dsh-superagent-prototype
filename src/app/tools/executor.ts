@@ -17,6 +17,8 @@ export interface ExecutorToolsHost {
   readonly resources: ResourceHost
   /** GitHub Source context whose pull-request rules govern claiming a reported PR. */
   readonly github: SourceContext
+  /** The Prime bridge's run request, which prepares the manifest a human approves. */
+  readonly prime?: { request(ticketId: string, featureDir: string): Promise<{ digest: string }> }
   sendReplies(): Promise<void>
 }
 
@@ -70,6 +72,19 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         reason: z.string().trim().min(1).max(300).describe('One sentence on what it asks for beyond this ticket.'),
       }).strict(),
       execute: async args => ({ trigger_id: args.trigger_id, queued: host.engine.handback(ticketId, args.trigger_id, args.reason) }),
+    }),
+    tool({
+      name: 'orchestrator_prime_request',
+      description: 'Ask the person in the original conversation to approve one approved specification for a Prime run. '
+        + 'It prepares the manifest of the feature directory and asks for the approval of that exact manifest; nothing runs before the approval.',
+      schema: z.object({
+        feature_dir: z.string().min(1).describe('The repository-relative feature directory, such as specs/001-prime-runner-bridge.'),
+      }).strict(),
+      execute: async (args) => {
+        if (!host.prime) throw new Error('The Prime bridge is not installed in this deployment')
+        const { digest } = await host.prime.request(ticketId, args.feature_dir)
+        return { feature_dir: args.feature_dir, manifest_sha256: digest, requested: true }
+      },
     }),
     tool({
       name: 'orchestrator_report',

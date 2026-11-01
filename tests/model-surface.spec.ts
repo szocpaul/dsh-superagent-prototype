@@ -348,8 +348,8 @@ function failures(): Map<string, string> {
 }
 
 it('collects both roles\' tools, prompts, skills and inputs', () => {
-  expect([...toolsOf('worker').keys()].sort()).toEqual(['orchestrator_ack', 'orchestrator_read', 'orchestrator_report',
-    'orchestrator_thread_follow',
+  expect([...toolsOf('worker').keys()].sort()).toEqual(['orchestrator_ack', 'orchestrator_prime_request', 'orchestrator_read',
+    'orchestrator_report', 'orchestrator_thread_follow',
     'orchestrator_thread_unrelated', 'orchestrator_trigger_handback'])
   expect([...toolsOf('orchestrator').keys()]).toEqual(expect.arrayContaining(['orchestrator_route', 'orchestrator_eval_decide', 'orchestrator_reply']))
   // The one routing tool takes the place of four.
