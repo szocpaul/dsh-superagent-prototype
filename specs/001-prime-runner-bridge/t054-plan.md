@@ -72,6 +72,41 @@ measured burn rate, not from a default.
 6. A separate stop test: the operator stops the Ticket, and the controller proves
    the cgroup is empty and the reservation and the guard are released.
 
+## The manifest digest
+
+The digest is a SHA-256 over the canonical bytes of the manifest, and the
+manifest is the exact contract of one run. It names:
+
+- the repository and the feature directory;
+- the baseline commit and the SHA-256 of the baseline tree;
+- the SHA-256 of the exact bytes of the specification, the plan, the task list,
+  the constitution, the repository guidance, and the extension configuration;
+- the paths the runner may write;
+- the ordered tasks, each marked automated or a human gate;
+- the checks the controller reruns;
+- the environment: the runner, the model, the isolation, the credential
+  categories, the quota thresholds, and its own digest.
+
+The canonical bytes are RFC 8785 JSON, so the digest does not depend on how the
+manifest was printed or serialized. The approval comment must carry this exact
+digest: an approval of a different manifest approves a different run, and the
+controller refuses it.
+
+The operator does not have to compute it. The controller builds the manifest when
+the request arrives and presents the digest with the environment summary, and
+the operator copies that digest into the approval comment.
+
+For the disposable fixture at the baseline commit `5cc02f3`, with the two
+approved paths, the one check and the environment the operator approved, the
+digest is:
+
+```text
+44e9f9bcccfe62a2eb3dd09073700b59306da55400b467b99fde5e25e5595a80
+```
+
+The digest changes when any of its parts changes, which is the point: it is the
+one value that says exactly what was approved.
+
 ## The host, the accounts, and the repository
 
 | Item | Value |
