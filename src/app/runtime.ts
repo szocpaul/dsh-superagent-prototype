@@ -51,6 +51,8 @@ import { createDeliveryLedger } from '../executor/prime-delivery.ts'
 import { PrimeSupervisor } from '../executor/prime-supervisor.ts'
 import { localIsolationRunner } from '../infra/prime-isolation.ts'
 import type { ApprovedManifest } from '../executor/prime-model.ts'
+import { readRunnerReport, verifySegment } from './prime-verification.ts'
+import { manifestDigest } from '../executor/prime-manifest.ts'
 import { allowlistOf, createPrimeBridge, deliveryAdapter, hostPreflightHost, hostRunEnvironment, manifestKey,
   quotaAdapter, requestRun, runnerAdapter, type PrimeServiceDeps } from './prime-service.ts'
 
@@ -257,8 +259,31 @@ export class Runtime extends Service implements SourceHost {
   /** The verification adapter of the bridge; a run whose verification cannot run stays blocked. */
   private verifyAdapter(): VerifyPort {
     return {
-      verify: async () => { throw new Error('The bridge verification is not installed yet, so the run stays blocked') },
+      verify: async (segment, manifest) => {
+        const workspace = segment.runner.workspace
+        const report = readRunnerReport(workspace, {
+          segmentId: segment.segmentId,
+          generation: segment.generation,
+          stopEpoch: segment.stopEpoch,
+          manifestSha256: manifestDigest(manifest),
+        })
+        const verification = await verifySegment({
+          commands: this.commands,
+          root: this.repositoryRoot(),
+          manifest,
+          segment,
+          report,
+          workspace,
+        })
+        return { runner: report, verification }
+      },
     }
+  }
+  /** The repository the bridge works in; the deployment names it, and the working tree is its checkout. */
+  private repositoryRoot(): string {
+    return this.store.settings().sources.github?.config?.repository
+      ? process.env.DSH_PRIME_REPOSITORY_ROOT ?? process.cwd()
+      : process.cwd()
   }
   private async initialize(): Promise<void> {
     // Register management HTTP routes before setup completes so operators can fix setup problems in the UI.

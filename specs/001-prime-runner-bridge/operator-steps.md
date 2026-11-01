@@ -158,7 +158,31 @@ was older than the documented 2.48 and did not support `--slurp`.
 
 Parts 2 and 3 of the smoke are still unapproved and unstarted.
 
-## 7. Cleanup
+## 7. The environment the second and third parts run in
+
+The bridge reads its deployment from environment variables, so the service needs
+these before a segment can start:
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `DSH_PRIME_MODEL` | `MiniMax-M3.1-Flash` | the approved model |
+| `DSH_PRIME_PROVIDER` | `minimax` | the approved provider |
+| `DSH_PRIME_VERSION` | the installed Prime CLI version | the preflight checks the version against the CLI |
+| `DSH_PRIME_CREDENTIALS` | `model-api` | the credential **category**; never a value |
+| `DSH_PRIME_WARN_TOKENS` | `30000000` | the approved warning threshold |
+| `DSH_PRIME_STOP_TOKENS` | `60000000` | the approved stop threshold |
+| `DSH_PRIME_MAX_WALL_MS` | `10800000` | three hours, the wall-clock bound of a segment |
+| `DSH_PRIME_BASE_BRANCH` | `main` | the branch the pull request targets |
+| `DSH_PRIME_WORKSPACE_ROOT` | under the state directory | where each Ticket's workspace is created |
+| `DSH_PRIME_BACKEND_SMOKE` | a minimal real model call | the preflight blocks the launch while it is unset |
+| `DSH_PRIME_ACCOUNTING` | the quota accounting command | the guard needs to know what it may count |
+
+The last two are commands the operator supplies. The smoke command is a real
+model call, so it spends a small amount of tokens; the accounting command tells
+the guard what it may count, because a session file alone does not cover the
+whole account.
+
+## 8. Cleanup
 
 The probe pull request and its branch were removed after the check. If a later
 probe is needed, delete its branch and close its pull request afterwards.

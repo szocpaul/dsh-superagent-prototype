@@ -413,7 +413,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/executor/prime-delivery.ts` | The delivery: the pull request, the expected-old-SHA push lease, the branch protection and auto-merge refusals, and the retained unknown outcome |
 | `src/executor/prime-bridge.ts` | The coordinator: the single runner reservation, the launch, the stop epoch, the reconciliation, the verification, and the delivery |
 | `src/app/prime-service.ts` | The composition of the bridge: the adapters over the Store, the Effects queue, the command line, and the ticket surface |
+| `src/app/prime-verification.ts` | The host-side verification: the controller's own commit of the approved result, the rerun of the approved checks against that exact revision in a credential-free checkout, and the reading of the runner's report |
 | `src/executor/prime-recovery.ts` | The reconciliation and publication policy: what the controller does with a segment it finds after a restart, and the fence that stops a late callback |
+| `src/smoke.ts` | The disposable fixture of the Prime Runner Bridge smoke: one exported function whose check proves the verification |
 
 ## Tests
 
@@ -467,6 +469,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/prime-tasks.spec.ts` | The task grammar, the progress comparator, and the scope changes it refuses |
 | `tests/prime-store.spec.ts` | The bridge records in the Store: the single runner reservation and its release, the durable approvals, reports and failures, and the bridge effects |
 | `tests/prime-isolation.spec.ts` | The isolation plan, the argument vectors, the containment probes, the quiescence verdicts, and the artifact collection |
+| `tests/prime-verification.spec.ts` | The host verification: the controller's commit, the rerun against the exact revision, the credential-free environment, and the failing check's exit code |
 | `tests/prime-launch.spec.ts` | The bounded autonomous invocation: the vector built from the manifest, the bounded goal, and the task prompt's constraints |
 | `tests/prime-bootstrap-barrier.spec.ts` | The bootstrap barrier: the runner starts in the background and the controller knows its identity before the work begins |
 | `tests/prime-cgroup-delegation.spec.ts` | The delegated cgroup of a run: its place under the delegated root, the kill file, and the empty process list that proves a stop |
@@ -481,6 +484,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/prime-stop.spec.ts` | The stop: its durable intent with the Ticket's end, the stop epoch, the fence of a late callback, and the reservation a stop keeps |
 | `tests/prime-recovery.spec.ts` | The recovery: the segments the controller holds, the identity it may not establish, and the reservation it keeps until an operator resolves it |
 | `tests/prime-publication-race.spec.ts` | The publication race: an unknown, delayed, or lease-refused remote outcome, and the one pull request a segment owns |
+| `tests/smoke.spec.ts` | The disposable fixture's check, which the smoke's verification reruns against the exact revision |
 
 ## Persistence
 

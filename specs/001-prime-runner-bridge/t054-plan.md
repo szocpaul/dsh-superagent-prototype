@@ -114,8 +114,14 @@ cleanup checklist in `runner-report.md` records what was removed.
 ## What the operator decides
 
 1. Whether to run this at all, and whether the three parts may run separately.
-2. The model provider and model, and the quota thresholds.
+   **Part 1 was approved and has run; see the runner report's section 4c.**
+2. The model provider and model, and the quota thresholds. **Decided 2026-11-01:
+   the `minimax` provider with the `MiniMax-M3.1-Flash` model, the same as the
+   session the operator works in, with the warning threshold at 30 million billed
+   tokens and the stop threshold at 60 million.** The task is small, so these
+   thresholds are a backstop against a runaway rather than an expected budget.
 3. The disposable feature's content: one trivial task and one human gate.
+   **Proposed in `t054-feature.md` and checked against the real parser.**
 4. Whether the pull request may be opened against the fork, given that the fork's
    `main` is protected and nothing is merged.
 5. Whether the smoke may spend model tokens at the measured rate, roughly 0.5 USD
