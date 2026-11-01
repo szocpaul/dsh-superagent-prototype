@@ -44,13 +44,14 @@ report, any valid Mandate, or a repository text file asserting approval. None bi
 human decision and current permissions to an immutable baseline. Using every explicit
 admission cell as approval would broaden the first version without an operator choice.
 
-**Operator decision, 2026-11-01**: accepted as a conditional design. The approval,
-gate-signer binding, dedicated Linux isolation, restricted network and separately
-enforced no-merge branch protection are approved in principle, subject to the
-feasibility spike in task T005. A control that the spike cannot prove blocks the
-affected story; the implementation does not weaken the protocol to keep it running.
-The approved manifest digest covers the environment and credential summary, so
-approving the digest approves that environment for that run.
+**Operator decision, 2026-11-01**: approved. The approval protocol, the gate-signer
+binding, the dedicated Linux isolation, the restricted network and the separately
+enforced no-merge branch protection are approved, with the limits the T005 spike
+measured. The gate edit and the continuation approval belong to the same allowlisted
+human; a revoked allowlist entry withdraws the approval. A control the spike could
+not prove blocks the affected story; the implementation does not weaken the protocol
+to keep it running. The approved manifest digest covers the environment and
+credential summary, so approving the digest approves that environment for that run.
 
 **Identities, operator decision 2026-11-01**: the controller uses a dedicated GitHub
 agent account with its own CLI configuration, separate from the human approver.

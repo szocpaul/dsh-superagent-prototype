@@ -6,7 +6,9 @@
 
 **Created**: 2026-11-01
 
-**Status**: Draft
+**Status**: Approved (operator, 2026-11-01); implementation not started. The
+feasibility spike in [runtime-report.md](runtime-report.md) proved the controls and
+measured their limits.
 
 **Input**: Connect a dsh-superagent Ticket to a Prime Agent autonomous spec runner so an authorized GitHub request can execute an already approved specification, stop at human gates, and deliver a verified result for review.
 

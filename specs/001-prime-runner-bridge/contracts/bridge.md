@@ -66,6 +66,9 @@ both operator and controller. Never include secret values.
   to the original Ticket conversation. The coordinator fetches commit, verification,
   exact parent/head and diff, comment and identity; requires only that gate marker
   change and records both pieces of evidence. PR review or CI alone is not consent.
+- The account that performs the gate edit and the account that approves the
+  continuation are the same allowlisted human. An allowlist entry revoked between
+  the edit and the decision withdraws the approval.
 - A denied, unrelated, stale, edited, deleted, unauthorized, bot-authored, missing,
   or unverifiable decision cannot resume. Recheck Ticket stop, manifest, branch head,
   current Policy and environment before reserving the next segment. An out-of-scope
