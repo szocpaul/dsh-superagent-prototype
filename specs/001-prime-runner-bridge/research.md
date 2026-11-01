@@ -52,6 +52,15 @@ affected story; the implementation does not weaken the protocol to keep it runni
 The approved manifest digest covers the environment and credential summary, so
 approving the digest approves that environment for that run.
 
+**Identities, operator decision 2026-11-01**: the controller uses a dedicated GitHub
+agent account with its own CLI configuration, separate from the human approver.
+The working repository is the operator's fork `szocpaul/dsh-superagent-prototype`
+with the upstream kept as `upstream`. The fork's `main` is protected so that the
+agent account cannot merge: a pull request and one approval are required, the
+rule applies to administrators, and the last pusher cannot approve its own pull
+request. Merge remains a human action on a different account. See
+[operator-steps.md](operator-steps.md).
+
 ## 3. Task progress and gate decisions
 
 **Decision**: Pin exact `spec.md`, `plan.md`, and `tasks.md` bytes at the approved

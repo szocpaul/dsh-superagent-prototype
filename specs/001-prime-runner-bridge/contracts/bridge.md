@@ -27,6 +27,11 @@ modify a Mandate or approval.
    A scope or environment change requires a new approved manifest. Follow-up delivery
    or general Ticket wake is not itself permission to launch.
 
+**Working repository**: the operator's fork `szocpaul/dsh-superagent-prototype`,
+with the upstream research prototype kept as `upstream`. The controller acts
+through a dedicated agent account; the human approver and the merge actor are
+different accounts.
+
 **Canonical manifest**: schema version 1; UTF-8 JSON, recursively sorted keys,
 using RFC 8785 JSON Canonicalization Scheme; arrays remain in semantic order.
 SHA-256 is taken over those exact UTF-8 bytes. Reject non-I-JSON values and include
