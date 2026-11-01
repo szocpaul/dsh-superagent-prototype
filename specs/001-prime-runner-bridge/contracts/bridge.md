@@ -29,8 +29,12 @@ modify a Mandate or approval.
 
 **Working repository**: the operator's fork `szocpaul/dsh-superagent-prototype`,
 with the upstream research prototype kept as `upstream`. The controller acts
-through a dedicated agent account; the human approver and the merge actor are
-different accounts.
+through a dedicated agent account with `push` access only; the human approver
+and the merge actor are the operator's own account, and they are different
+accounts from the agent's. The GitHub Source drops the agent account's own
+messages, so a shared account would also hide the operator's requests and
+approval; the separation is required by the source, not only by the audit
+trail.
 
 **Canonical manifest**: schema version 1; UTF-8 JSON, recursively sorted keys,
 using RFC 8785 JSON Canonicalization Scheme; arrays remain in semantic order.

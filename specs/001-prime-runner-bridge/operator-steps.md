@@ -7,8 +7,9 @@ requests, stores, or transmits a secret, and never asks for one in a conversatio
 ## 1. The agent account
 
 The bridge controller needs a GitHub identity that is **not** the human approver.
-This lets the branch rules distinguish the two, and it keeps the agent's writes
-visibly separate from a person's decisions.
+This follows the upstream deployment guide, and the GitHub Source requires it:
+the source drops the messages of the agent account, so one shared account would
+hide the operator's requests and approval as well as weaken the audit trail.
 
 - Create a GitHub user account for the agent, for example
   `szocpaul-dsh-agent`. Give it write access to the working repository only.
@@ -17,6 +18,9 @@ visibly separate from a person's decisions.
 - Keep it separate from the human approver account. The bridge's gate protocol
   requires a human decision and a controller action to be attributable to
   different accounts.
+- Create the account with the name only; no organisation, no team, and no
+  other repository access. The account needs no email inbox of its own beyond
+  the one GitHub requires for registration.
 
 ## 2. A separate CLI configuration for the agent
 
@@ -40,7 +44,31 @@ deployment asks for the agent account. Never reuse the human account's token.
 Do not store the token in this repository, in a prompt, in a report, or in a
 specification. The file under `~/.config/gh-agent` holds it.
 
-## 3. The working repository and its branch rules
+## 3. Granting the agent write access
+
+After the account exists, invite it to the working repository:
+
+```sh
+gh api -X PUT repos/szocpaul/dsh-superagent-prototype/collaborators/szocpaul-dsh-agent \
+  -f permission=push
+```
+
+The permission is `push`, not `admin` and not `maintain`. The agent needs to
+create branches and open pull requests. It must not be able to change the
+branch rules, and it must not be able to merge: the protected `main` refuses a
+merge by the account that pushed the branch, and refuses an administrator
+merge as well.
+
+Verify the result:
+
+```sh
+gh api repos/szocpaul/dsh-superagent-prototype/collaborators/szocpaul-dsh-agent \
+  --jq '{login, permissions}'
+```
+
+The `permissions` object must not contain `admin: true` or `maintain: true`.
+
+## 4. The working repository and its branch rules
 
 The development repository is the operator's fork of the upstream research
 prototype:
@@ -59,7 +87,7 @@ administrator privileges was refused, and pushing directly to `main` was refused
 The agent account therefore opens pull requests and pushes branches; a human
 account performs the merge.
 
-## 4. What the operator does during a gate
+## 5. What the operator does during a gate
 
 The human performs the gate action through the GitHub web interface on the
 Ticket branch:
@@ -82,7 +110,7 @@ are unsigned. The bridge requires the signed, attributable form.
 **Never** let the agent write the gate checkbox itself, and never approve a
 gate in the agent's name.
 
-## 5. Cleanup
+## 6. Cleanup
 
 The probe pull request and its branch were removed after the check. If a later
 probe is needed, delete its branch and close its pull request afterwards.

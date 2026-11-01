@@ -54,6 +54,15 @@ approving the digest approves that environment for that run.
 
 **Identities, operator decision 2026-11-01**: the controller uses a dedicated GitHub
 agent account with its own CLI configuration, separate from the human approver.
+This follows the upstream deployment guide: the agent acts under its own account,
+the operator merges. A GitHub App cannot be the agent, because dsh-superagent
+reads the account's notifications.
+
+The separation is also required by the source's own filtering: the GitHub Source
+drops the messages of the agent account and treats them as not written by a
+person. Sharing one account would therefore hide the operator's requests and
+approval, not only weaken the audit trail.
+
 The working repository is the operator's fork `szocpaul/dsh-superagent-prototype`
 with the upstream kept as `upstream`. The fork's `main` is protected so that the
 agent account cannot merge: a pull request and one approval are required, the
