@@ -485,6 +485,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/prime-recovery.spec.ts` | The recovery: the segments the controller holds, the identity it may not establish, and the reservation it keeps until an operator resolves it |
 | `tests/prime-publication-race.spec.ts` | The publication race: an unknown, delayed, or lease-refused remote outcome, and the one pull request a segment owns |
 | `tests/smoke.spec.ts` | The disposable fixture's check, which the smoke's verification reruns against the exact revision |
+| `tests/prime-allowlist.spec.ts` | The approver allowlist: the agent's own account is never among the accounts that may approve |
 
 ## Persistence
 

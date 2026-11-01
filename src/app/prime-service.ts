@@ -59,9 +59,17 @@ export interface PrimeServiceDeps {
 /** The manifest a Ticket asked to run, by Ticket ID. */
 export function manifestKey(ticketId: string): string { return KV.bridge.manifest(ticketId) }
 
-/** The GitHub logins that may currently approve work. */
-export function allowlistOf(settings: ReturnType<Store['settings']>): string[] {
-  return settings.policy.sources.github?.allowed.map(entry => entry.id) ?? []
+/**
+ * The GitHub logins that may currently approve work.
+ *
+ * The agent's own account is never among them: the controller acts under that account, so letting it approve
+ * would let the agent approve its own work. The separation is enforced here rather than left to the operator's
+ * configuration alone.
+ */
+export function allowlistOf(settings: ReturnType<Store['settings']>, agentLogin?: string): string[] {
+  const allowed = settings.policy.sources.github?.allowed.map(entry => entry.id) ?? []
+  if (!agentLogin) return allowed
+  return allowed.filter(login => login.toLowerCase() !== agentLogin.toLowerCase())
 }
 
 /** A manifest source that reads the baseline through git. */
@@ -95,7 +103,7 @@ export function createPrimeBridge(deps: PrimeServiceDeps, adapters: PrimeAdapter
       const record = store.bridge.approvals.byTicket(segment.ticketId)
         .filter(item => item.kind === 'run' && item.manifestSha256 === digest).at(-1)
       if (!record) throw new Error('The manifest has no approval')
-      if (!approvalIsCurrent(record, allowlistOf(deps.settings()))) throw new Error('The approver is no longer allowlisted')
+      if (!approvalIsCurrent(record, allowlistOf(deps.settings(), deps.deployment().github.login))) throw new Error('The approver is no longer allowlisted')
     },
     async gateDecision(segment: BridgeSegment, manifest: ApprovedManifest): Promise<ApprovalRecord | undefined> {
       if (!segment.nextGateId) return undefined
@@ -103,7 +111,7 @@ export function createPrimeBridge(deps: PrimeServiceDeps, adapters: PrimeAdapter
       const record = store.bridge.approvals.byTicket(segment.ticketId)
         .filter(item => item.kind === 'gate' && item.gateId === segment.nextGateId && item.manifestSha256 === digest).at(-1)
       if (!record || !record.gateCommit) return undefined
-      if (!approvalIsCurrent(record, allowlistOf(deps.settings()))) return undefined
+      if (!approvalIsCurrent(record, allowlistOf(deps.settings(), deps.deployment().github.login))) return undefined
       return record
     },
     async findRunApproval(ticketId: string, manifestSha256: string): Promise<ApprovalRecord | undefined> {
@@ -471,7 +479,7 @@ export async function conversation(deps: PrimeServiceDeps, ticketId: string): Pr
 function approvalSource(deps: PrimeServiceDeps, ticketId: string): ApprovalSource {
   const number = issueNumber(deps, ticketId)
   return {
-    allowlist: () => allowlistOf(deps.settings()),
+    allowlist: () => allowlistOf(deps.settings(), deps.deployment().github.login),
     policyVersion: () => policyVersion(deps.settings()),
     async fetchComment(commentId: string): Promise<ApprovalEvidence | undefined> {
       if (!number) return undefined
@@ -528,7 +536,7 @@ export async function findGateApproval(deps: PrimeServiceDeps, ticketId: string,
   if (!ticket || !manifest) return undefined
   const comments = await conversation(deps, ticketId)
   const source = approvalSource(deps, ticketId)
-  const allowlist = allowlistOf(deps.settings())
+  const allowlist = allowlistOf(deps.settings(), deps.deployment().github.login)
   for (const comment of comments) {
     const command = GATE_COMMAND.exec(comment.body.trim())
     if (!command || command[3] !== gateId || command[4] !== manifestSha256) continue
