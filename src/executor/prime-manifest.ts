@@ -252,16 +252,26 @@ export interface ManifestRequest {
   checks?: ApprovedCheck[]
 }
 
-/** The paths the plan's Project Structure section names, which the manifest proposes as the writable scope. */
+/**
+ * The paths the plan's Project Structure section names, which the manifest proposes as the writable scope.
+ *
+ * The section is read from its "Source Code" part, not from the documentation tree: a plan lists the feature's own
+ * artifacts first and the repository's files afterwards, and the documentation tree names no writable path at all.
+ * A plan without that heading falls back to every code block, so a simpler plan still proposes a scope.
+ */
 export function pathsFromPlan(plan: string): string[] {
-  const block = /```(?:text|ts|tsx)?\n([\s\S]*?)```/.exec(plan)?.[1] ?? ''
+  const blocks = [...plan.matchAll(/```(?:text|ts|tsx)?\n([\s\S]*?)```/g)].map(match => match[1] ?? '')
+  const heading = plan.indexOf('### Source Code')
+  const candidates = heading < 0 ? blocks : blocks.slice(1)
   const found = new Set<string>()
-  for (const line of block.split('\n')) {
-    const match = /([\w./@-]+(?:\/[\w./@-]+)*)\/?(?:\s|$)/.exec(line.replace(/^[│├└─\s]+/, ''))
-    const path = match?.[1]
-    if (!path || path.includes('.') && !path.includes('/')) continue
-    if (path.startsWith('specs/') || path.startsWith('docs/') || path.startsWith('prompts/') || path.startsWith('skills/')) continue
-    found.add(path.replace(/\/$/, ''))
+  for (const block of candidates) {
+    for (const line of block.split('\n')) {
+      const match = /([\w./@-]+(?:\/[\w./@-]+)*)\/?(?:\s|$)/.exec(line.replace(/^[\u2502\u251c\u2514\u2500\s]+/, ''))
+      const path = match?.[1]
+      if (!path || path.includes('.') && !path.includes('/')) continue
+      if (path.startsWith('specs/') || path.startsWith('docs/') || path.startsWith('prompts/') || path.startsWith('skills/')) continue
+      found.add(path.replace(/\/$/, ''))
+    }
   }
   return [...found].sort()
 }
