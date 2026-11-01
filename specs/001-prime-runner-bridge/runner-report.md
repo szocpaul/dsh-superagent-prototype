@@ -190,6 +190,74 @@ and the quota accounting command are still unset, so the preflight blocks the
 launch by design. These need the operator's authorization and a real
 environment; they are what task T054 asks for.
 
+## 4c. T054 part 1: the isolated host start
+
+The operator authorized the first part of the disposable smoke: the host starts
+alone, without a model call and without a GitHub write. It ran on 2026-11-01 and
+it passed, after two defects were found and fixed.
+
+### What was done
+
+| Step | Result |
+| --- | --- |
+| `npm install -g @deepseek-ai/dsh@0.2.1-rc.3` | the pinned version from `docs/006-deployment.md` |
+| `dsh superagent --from-default-profile web --dump-config` | the `superagent` profile, with the webserver on 127.0.0.1:3082 and `stateDir` at `/home/ubuntu/.dsh/state/superagent` |
+| `dsh plugin --profile superagent add "link:$PWD"` | this bundle, linked from the working repository |
+| `pnpm build` | the bundle built from the current sources |
+| `scripts/dsh-superagent start` | the service started |
+| `scripts/dsh-superagent status` | exit 0 |
+
+The final state: the runtime is `ready`, every component of the bridge reports
+`ready`, the GitHub Source reports `ready` with "0 notifications; next poll >= 60s",
+there is no setup problem and no error.
+
+### The two defects this part found
+
+**The service script did not find its own process.** `ps` reports the thread name
+in `ucomm` on this system, where the Node service appears as `MainThread`
+instead of `node`. The script compared the name against `('node', 'dsh')` and
+therefore reported no PID and no health, even though the service was running and
+answering. The script now decides from the command line when the name is not
+recognizable, and `tests/service-script.spec.ts` proves all three cases: the
+thread name, the node name, and another profile or another Node program.
+
+**The GitHub CLI was too old for the source.** The source reads paged API
+responses with `gh api --paginate --slurp`, and `--slurp` needs GitHub CLI 2.47
+or later; the installed 2.46 refused it and the Source reported "3 consecutive
+failed polls". `docs/006-deployment.md` asks for 2.48 or later, so the system
+package was behind the documented requirement. The official 2.103.3 binary is now
+first on the user's path, and the system package at `/usr/bin/gh` is left in
+place for anything that expects it.
+
+### What this part does not prove
+
+No model was called, no branch was pushed, no pull request was opened, and the
+agent account's credentials were used only to read the account and the
+repository's permissions, which is what the deployment check does.
+
+The bridge itself is installed and reports ready, but it has never run a
+segment: its verification adapter throws by design until a repository adapter
+supplies the controller's own revision and reruns the approved checks, so a run
+blocks at the verification step and opens no pull request. That is the expected
+outcome and is named as such in the T054 plan.
+
+The DSH profile is a directory under `~/.dsh` and the service runs in the
+`dsh-superagent` tmux session. Both belong to this deployment and can be
+removed with `scripts/dsh-superagent stop` and the removal of the profile
+directory.
+
+### Commands run
+
+| Command | Exit |
+| --- | --- |
+| `npm install -g @deepseek-ai/dsh@0.2.1-rc.3` | 0 |
+| `dsh superagent --from-default-profile web --dump-config` | 0 |
+| `dsh plugin --profile superagent add "link:$PWD"` | 0 |
+| `pnpm build` | 0 |
+| `scripts/dsh-superagent status` | 0 |
+| `pnpm exec vitest run tests/service-script.spec.ts` | 0 |
+| `pnpm exec vitest run` | 0 (77 files, 1468 tests) |
+
 ## 5. Human decisions still needed
 
 1. **T054 (MANUAL GATE)**: the operator's explicit approval for a disposable

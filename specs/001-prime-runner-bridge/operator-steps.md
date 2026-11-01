@@ -135,7 +135,30 @@ are unsigned. The bridge requires the signed, attributable form.
 **Never** let the agent write the gate checkbox itself, and never approve a
 gate in the agent's name.
 
-## 6. Cleanup
+## 6. What the operator approved for the T054 smoke
+
+The operator approved part 1 of the disposable smoke on 2026-11-01: the host
+starts alone, with no model call and no GitHub write. It ran and passed; see the
+runner report's section 4c.
+
+The deployment it produced:
+
+| Item | Value |
+| --- | --- |
+| DSH host | `@deepseek-ai/dsh` 0.2.1-rc.3, the version the deployment guide pins |
+| Profile | `superagent`, webserver on 127.0.0.1:3082 |
+| State directory | `/home/ubuntu/.dsh/state/superagent` |
+| GitHub Source | repository `szocpaul/dsh-superagent-prototype`, agent CLI `/home/ubuntu/.local/bin/gh-agent` |
+| Agent account | `szocpaul-dsh-agent` |
+| GitHub CLI | 2.103.3 from the official release, first on the user's path |
+
+Two things were fixed to make it run: the service script did not recognize the
+service process when `ps` reported the thread name, and the installed GitHub CLI
+was older than the documented 2.48 and did not support `--slurp`.
+
+Parts 2 and 3 of the smoke are still unapproved and unstarted.
+
+## 7. Cleanup
 
 The probe pull request and its branch were removed after the check. If a later
 probe is needed, delete its branch and close its pull request afterwards.
