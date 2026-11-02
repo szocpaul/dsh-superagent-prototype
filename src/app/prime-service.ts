@@ -18,7 +18,8 @@ import { deliver as deliverPull, type BranchProtection, type CreatePullInput, ty
   type PullRef, type PullState, type UpdatePullInput } from '../executor/prime-delivery.ts'
 import { QuotaMonitor, type GuardIdentity } from '../executor/prime-quota.ts'
 import { buildManifest, manifestDigest, type ManifestSource } from '../executor/prime-manifest.ts'
-import { REPORT_FILE, REPORT_MARKDOWN_FILE } from '../executor/prime-report.ts'
+import { parseRunnerReport, REPORT_FILE, REPORT_MARKDOWN_FILE } from '../executor/prime-report.ts'
+import type { RunnerReport } from '../executor/prime-model.ts'
 import { buildLaunchInvocation, AUTONOMOUS_FLAGS } from '../executor/prime-launch.ts'
 import { preflight, type PreflightHost } from '../executor/prime-preflight.ts'
 import { approvalEvidence, approvalIsCurrent, approveRun, denyRun, verifyGateCommit, verifyGateDecision, type AccountType,
@@ -314,6 +315,24 @@ export function writeRunnerModel(storage: string, manifest: ApprovedManifest): s
   return file
 }
 
+/** The report of a finished run, when the run wrote one that belongs to the segment. */
+function runnerReport(segment: BridgeSegment): RunnerReport | undefined {
+  const file = join(segment.runner.workspace, REPORT_FILE)
+  if (!existsSync(file)) return undefined
+  try {
+    return parseRunnerReport(readFileSync(file, 'utf8'), {
+      segmentId: segment.segmentId,
+      generation: segment.generation,
+      stopEpoch: segment.stopEpoch,
+      manifestSha256: segment.manifestId,
+      ticketId: segment.ticketId,
+      assignmentId: segment.assignmentId,
+    })
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * The commands the runner's own tooling needs inside the confinement.
  *
@@ -384,6 +403,9 @@ export function runnerAdapter(supervisor: PrimeSupervisor, deps: PrimeServiceDep
       return {
         running: state.status === 'busy',
         stop: state.status === 'quiescent' ? 'stopped' : state.status === 'busy' ? 'unconfirmed' : 'unknown',
+        // A run that ended writes its report into the run's own storage; the reconciliation reads it there, and a
+        // report that does not belong to this segment is no report at all.
+        report: runnerReport(segment),
       }
     },
     async cleanup(segment: BridgeSegment, stopConfirmed: boolean): Promise<void> {
