@@ -63,8 +63,11 @@ class FakePort implements PullPort {
     return state
   }
 
-  async branchProtection(): Promise<BranchProtection> {
+  protectedBranches: string[] = []
+
+  async branchProtection(branch: string): Promise<BranchProtection> {
     this.maybeFail('branchProtection')
+    this.protectedBranches.push(branch)
     return this.protection
   }
 
@@ -88,6 +91,12 @@ const request = (overrides: Partial<DeliveryRequest> = {}): DeliveryRequest => (
 })
 
 describe('delivery guards', () => {
+  it('asks for the protection of the branch the pull request lands on, not of the branch it publishes from', async () => {
+    const port = new FakePort()
+    await deliver(request({ branch: 'agent/T-1', base: 'main' }), port)
+    expect(port.protectedBranches).toEqual(['main'])
+  })
+
   it('requires server-enforced protection that forbids the controller merge', () => {
     expect(assertNoMergeRights({ required: true, forbidsMerge: true }).ok).toBe(true)
     const forbidden = assertNoMergeRights({ required: true, forbidsMerge: false })

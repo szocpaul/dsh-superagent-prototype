@@ -257,7 +257,9 @@ export const deliver = async (
   }
   let protection: BranchProtection
   try {
-    protection = await port.branchProtection(request.branch)
+    // The protection that matters is the one of the branch the pull request lands on: the branch the result is
+    // published from does not exist yet, and the merge rights are the ones of the target.
+    protection = await port.branchProtection(request.base)
   } catch (error) {
     return unknown('branchProtection', error)
   }
