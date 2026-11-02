@@ -100,6 +100,8 @@ describe('the run request of a Prime run', () => {
       expect(manifest.repository).toEqual({ id: REPOSITORY_ID, fullName: 'example/fixture' })
       expect(digest).toMatch(/^[0-9a-f]{64}$/)
       expect(manifest.allowedPaths).toEqual(['src/smoke.ts', 'tests/smoke.spec.ts'])
+      // The confinement writes exactly the approved scope, so the manifest and the isolation cannot disagree.
+      expect(manifest.environment.isolation.writablePaths).toEqual(manifest.allowedPaths)
       expect(manifest.tasks.map(task => task.kind)).toEqual(['automated', 'automated', 'human', 'automated', 'automated'])
       expect(store.get(manifestKey('ticket-1'))).toEqual(manifest)
     } finally {

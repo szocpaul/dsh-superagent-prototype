@@ -60,17 +60,17 @@ describe('the cgroup of a run that is gone', () => {
   const commands = { run: async () => '' } as never
   const gone = join(tmpdir(), 'prime-cgroup-gone', 'no-such-cgroup')
 
-  it('reads a cgroup that does not exist as a run that holds no process', () => {
-    expect(hostRunEnvironment(commands).processes(gone)).toEqual([])
+  it('reads a cgroup that does not exist as a run that holds no process', async () => {
+    await expect(hostRunEnvironment(commands).processes(gone)).resolves.toEqual([])
   })
 
   it('cancels a run whose cgroup is gone without failing', async () => {
     await expect(hostRunEnvironment(commands).cancel({ cgroup: gone } as never)).resolves.toBeUndefined()
   })
 
-  it('keeps the state of a run unknown when its cgroup cannot be read', () => {
+  it('keeps the state of a run unknown when its cgroup cannot be read', async () => {
     const unreadable = mkdtempSync(join(tmpdir(), 'prime-cgroup-unreadable-'))
-    expect(() => hostRunEnvironment(commands).processes(unreadable)).toThrow()
+    await expect(hostRunEnvironment(commands).processes(unreadable)).rejects.toThrow()
   })
 
   it('confirms the stop of a run whose cgroup is gone', async () => {

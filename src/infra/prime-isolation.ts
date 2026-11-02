@@ -89,6 +89,9 @@ export interface IsolationPlanOptions {
 /** The default toolchain paths the confinement needs to execute the runner. */
 const DEFAULT_SYSTEM_PATHS = ['/usr', '/etc/ssl']
 
+/** The directories of the checkout that hold the deployment's own state, and never the run's. */
+const MACHINE_STATE = ['.artifacts']
+
 /** Rejects a path that is absolute, empty, or names control state. */
 function checkRelativePath(path: string, label: string): void {
   if (!path || path.trim() !== path) throw new IsolationError(`a ${label} may not be empty or padded with whitespace`)
@@ -297,6 +300,8 @@ export function buildBwrapArgs(plan: IsolationPlan): string[] {
     args.push('--bind', path, target)
   }
   args.push('--bind', plan.storage, plan.storage)
+  // The machine state of the checkout holds the deployment's own secrets, so the confinement masks it.
+  for (const directory of MACHINE_STATE) args.push('--tmpfs', `${plan.workspaceMount}/${directory}`)
   args.push('--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64')
   args.push('--chdir', plan.workspaceMount)
   args.push('--clearenv')

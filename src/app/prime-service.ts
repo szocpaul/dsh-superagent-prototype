@@ -235,12 +235,19 @@ export function hostRunEnvironment(commands: Commands): RunEnvironment {
       if (!existsSync(kill)) throw new Error(`the cgroup of the run has no kill file: ${identity.cgroup}`)
       writeFileSync(kill, '1')
     },
-    processes(cgroup: string): number[] {
+    async adopt(cgroup: string, pid: number): Promise<void> {
+      // The cgroup takes the process and everything it spawns, so the run's stop reaches the whole tree.
+      writeFileSync(join(cgroup, 'cgroup.procs'), `${pid}\n`)
+    },
+    async processes(cgroup: string, unit?: string): Promise<number[]> {
       // The kernel removes a cgroup only when it holds no process and no child cgroup, so a cgroup that is gone
       // proves that the run holds no process. A cgroup that exists but cannot be read keeps the state unknown.
       if (!existsSync(cgroup)) return []
       const file = join(cgroup, 'cgroup.procs')
-      return readFileSync(file, 'utf8').split('\n').map(line => line.trim()).filter(Boolean).map(Number)
+      const pids = readFileSync(file, 'utf8').split('\n').map(line => line.trim()).filter(Boolean).map(Number)
+      // The unit's own placeholder keeps the cgroup alive; the run's processes are the others.
+      const placeholder = unit ? await mainPidOf(commands, unit) : undefined
+      return placeholder ? pids.filter(pid => pid !== placeholder) : pids
     },
     async remove(identity: SegmentRunnerIdentity): Promise<string[]> {
       const removed: string[] = []
@@ -256,6 +263,18 @@ export function hostRunEnvironment(commands: Commands): RunEnvironment {
 
 /** How long the runner may take to report its durable session identity; its kernel is set up first. */
 const IDENTITY_TIMEOUT_MS = 600_000
+
+/** The process the run's own service unit keeps alive, so the cgroup of the run exists. */
+async function mainPidOf(commands: Commands, unit: string): Promise<number | undefined> {
+  const name = unit.endsWith('.service') ? unit : `${unit}.service`
+  try {
+    const shown = await commands.run('systemctl', ['--user', 'show', name, '--property=MainPID', '--value'])
+    const pid = Number(shown.trim())
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /**
  * The model configuration the run uses inside the confinement.

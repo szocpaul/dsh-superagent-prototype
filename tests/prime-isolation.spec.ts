@@ -174,6 +174,14 @@ describe('isolation plan', () => {
     expect(plan.env.PATH).toContain(tools)
   })
 
+  it('masks the machine state of the checkout, so the deployment\'s own secrets stay out of the confinement', () => {
+    const root = workspace()
+    const args = buildBwrapArgs(isolationPlan(manifest(), root))
+    expect(args).toContain('--tmpfs')
+    const tmpfs = args.reduce<string[]>((found, value, index) => (args[index - 1] === '--tmpfs' ? [...found, value] : found), [])
+    expect(tmpfs).toContain('/workspace/.artifacts')
+  })
+
   it('finds the runner\'s session in the directory it writes it into', () => {
     const directory = mkdtempSync(join(tmpdir(), 'prime-session-'))
     writeFileSync(join(directory, '01a19c22-3a45-766a-a5de-6cfa2aeb6240.jsonl'), '{}\n')
@@ -318,13 +326,15 @@ describe('supervised runner', () => {
   let root: string
   let identity: SegmentRunnerIdentity
   let processes: number[]
+  const adopted: number[][] = []
   let removed: string[]
 
   const environment = (): RunEnvironment => ({
     supported: () => true,
     async start() { },
     async cancel() { processes = [] },
-    processes() {
+    async adopt() { adopted.push(processes ?? []) },
+    async processes() {
       if (processes === null) throw new IsolationError('the cgroup cannot be read')
       return processes
     },

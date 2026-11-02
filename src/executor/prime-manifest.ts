@@ -307,7 +307,10 @@ export async function buildManifest(source: ManifestSource, request: ManifestReq
   })
   if (!allowedPaths.length) throw new ManifestError('The manifest proposes no writable path; the operator must name the approved scope')
   const checks = request.checks ?? await defaultChecks(source)
-  const environment = { ...request.environment, digest: digest(request.environment as never) }
+  // The writable scope of the run is the approved scope: the confinement binds exactly these paths writable, so the
+  // manifest and the isolation can never disagree about what the run may write.
+  const isolation = { ...request.environment.isolation, writablePaths: [...allowedPaths] }
+  const environment = { ...request.environment, isolation, digest: digest({ ...request.environment, isolation } as never) }
   return validateManifest({
     schemaVersion: 1,
     repository: request.repository,

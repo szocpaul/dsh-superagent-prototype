@@ -25,7 +25,9 @@ export interface RunEnvironment {
    * A cgroup that is gone holds no process, because the kernel removes a cgroup only when it is empty; a cgroup
    * that exists but cannot be read throws, so the state of the run stays unknown.
    */
-  processes(cgroup: string): number[]
+  processes(cgroup: string, unit?: string): Promise<number[]>
+  /** Moves a process into the run's cgroup, so that the run's stop reaches it. */
+  adopt(cgroup: string, pid: number): Promise<void>
   /** Removes the run-owned service, socket, tmux server and scratch directory. */
   remove(identity: SegmentRunnerIdentity): Promise<string[]>
 }
@@ -149,6 +151,8 @@ export class PrimeSupervisor {
     // The runner is a long-running process: it is started in the background and its durable identity is awaited,
     // rather than waiting for it to end. A run that ends before it reports an identity failed to start.
     const process = this.runner.spawn(argv, { cwd: plan.workspace, env: plan.env })
+    // The runner joins the run's own cgroup, so the run's stop empties it and the runner's death empties it too.
+    await this.environment.adopt(identity.cgroup, process.pid)
     const configured: number = Number(plan.env.IDENTITY_TIMEOUT_MS)
     const timeoutMs: number = Number.isFinite(configured) && configured > 0 ? configured : IDENTITY_TIMEOUT_MS
     const session = await this.awaitSessionIdentity(plan, process, timeoutMs)
@@ -214,7 +218,7 @@ export class PrimeSupervisor {
   async quiescence(identity: SegmentRunnerIdentity): Promise<QuiescenceVerdict> {
     let processes: number[] | null
     try {
-      processes = this.environment.processes(identity.cgroup)
+      processes = await this.environment.processes(identity.cgroup, identity.serviceUnit)
     } catch {
       return { status: 'unknown', reason: `the cgroup ${identity.cgroup} cannot be read, so the state of the run is unknown`, processes: null }
     }
