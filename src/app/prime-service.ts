@@ -322,13 +322,14 @@ export function runnerAdapter(supervisor: PrimeSupervisor, deps: PrimeServiceDep
   return {
     async launch(segment: BridgeSegment, manifest: ApprovedManifest): Promise<{ sessionId?: string; sessionFile?: string }> {
       const barrierPath = join(segment.runner.workspace, '.prime-bridge-barrier')
+      const sessionDir = join(segment.runner.workspace, 'session')
       const invocation = buildLaunchInvocation(manifest, {
         taskIds: segment.taskIds,
         nextGateId: segment.nextGateId ?? undefined,
         barrier: { path: barrierPath, release: `${segment.segmentId}:${segment.generation}` },
         reportPath: join(segment.runner.workspace, REPORT_FILE),
         markdownPath: join(segment.runner.workspace, REPORT_MARKDOWN_FILE),
-        sessionDir: join(segment.runner.workspace, 'session'),
+        sessionDir,
         bindings: {
           ticketId: segment.ticketId,
           assignmentId: segment.assignmentId,
@@ -344,6 +345,7 @@ export function runnerAdapter(supervisor: PrimeSupervisor, deps: PrimeServiceDep
         argv: invocation.argv,
         segmentId: segment.segmentId,
         storage: segment.runner.workspace,
+        sessionDir,
         env: { ...runCredential(), IDENTITY_TIMEOUT_MS: String(IDENTITY_TIMEOUT_MS) },
         tools: runnerTools(),
       })

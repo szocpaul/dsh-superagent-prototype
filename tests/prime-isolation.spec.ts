@@ -27,7 +27,7 @@ import {
 } from '../src/infra/prime-isolation.ts'
 import { harness, reserve } from './fixtures/prime-bridge-host.ts'
 import type { IsolationPlan, IsolationRunner, ProbeAttempt, ProbeKind } from '../src/infra/prime-isolation.ts'
-import { PrimeSupervisor } from '../src/executor/prime-supervisor.ts'
+import { PrimeSupervisor, sessionOfDirectory } from '../src/executor/prime-supervisor.ts'
 import type { RunEnvironment } from '../src/executor/prime-supervisor.ts'
 import type { ApprovedManifest, SegmentRunnerIdentity } from '../src/executor/prime-model.ts'
 
@@ -172,6 +172,15 @@ describe('isolation plan', () => {
     const plan = isolationPlan(manifest(), root, { tools: [tool] })
     expect(plan.readOnlyPaths).toContain(tools)
     expect(plan.env.PATH).toContain(tools)
+  })
+
+  it('finds the runner\'s session in the directory it writes it into', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'prime-session-'))
+    writeFileSync(join(directory, '01a19c22-3a45-766a-a5de-6cfa2aeb6240.jsonl'), '{}\n')
+    const found = sessionOfDirectory(directory)
+    expect(found.sessionId).toBe('01a19c22-3a45-766a-a5de-6cfa2aeb6240')
+    expect(found.sessionFile).toBe(join(directory, '01a19c22-3a45-766a-a5de-6cfa2aeb6240.jsonl'))
+    expect(sessionOfDirectory(join(directory, 'missing')).sessionId).toBeUndefined()
   })
 
   it('binds the storage of the run writable and gives the runner its home there', () => {

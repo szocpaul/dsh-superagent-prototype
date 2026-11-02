@@ -36,6 +36,8 @@ export interface IsolationPlan {
   writablePaths: string[]
   /** The host path of the run's own storage: its session, its report and its own configuration. */
   storage: string
+  /** The host path of the directory the runner writes its session into. */
+  sessionDir: string
   /** The host paths bound read-only: the checkout first, then the toolchain paths the runner needs to execute. */
   readOnlyPaths: string[]
   /** A read-only file inside the checkout, used by the hardlink escape probe. */
@@ -76,6 +78,8 @@ export interface IsolationPlanOptions {
   systemPaths?: string[]
   /** The run's own storage, bound writable; the runner's session and its report live there. */
   storage?: string
+  /** The directory the runner writes its session into; it defaults to a directory of the run's storage. */
+  sessionDir?: string
   /** The commands the runner's own tooling needs, bound read-only so the confinement can execute them. */
   tools?: string[]
   /** The environment the host adds to the run; it carries the approved credential of the run. */
@@ -230,6 +234,7 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
   // The run's own storage holds the session, the report and the runner's own configuration. It is the runner's
   // home inside the confinement, so the controller can read what the run produced after it ended.
   const storage = resolve(options.storage ?? join(work, '.prime-bridge'))
+  const sessionDir = resolve(options.sessionDir ?? join(storage, 'session'))
   // The runner and the commands the approved checks name are bound read-only, so the confinement can execute them
   // even though the operator's home is masked and only the repository is bound.
   const runner = resolveCommand(manifest.environment.runner.cli)
@@ -247,6 +252,7 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
     workspaceMount: work === root ? '/workspace' : `/workspace/${relative(root, work)}`,
     writablePaths,
     storage,
+    sessionDir,
     readOnlyPaths: [root, ...directories, ...(options.systemPaths ?? DEFAULT_SYSTEM_PATHS).map(path => resolve(path))],
     readOnlySample: sample ? join(root === work ? '/workspace' : `/workspace/${relative(root, work)}`, relative(root, sample)) : '/workspace',
     network: isolation.network,
