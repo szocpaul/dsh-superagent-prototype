@@ -106,6 +106,23 @@ describe('the recovery decision', () => {
   })
 })
 
+describe('the periodic reconciliation', () => {
+  it('reconciles a running segment and leaves a finished one to its own effect', () => {
+    const host = harness()
+    const segment = reserve(host)
+    host.store.bridge.segments.save({ ...segment, phase: 'running' })
+    host.bridge.reconcileOpenSegments()
+    const running = host.store.db.prepare('SELECT kind FROM effect WHERE kind = ?').all('prime-reconcile')
+    expect(running).toHaveLength(1)
+
+    host.store.bridge.segments.save({ ...segment, phase: 'unknown' })
+    host.store.db.prepare('DELETE FROM effect WHERE kind = ?').run('prime-reconcile')
+    host.bridge.reconcileOpenSegments()
+    expect(host.store.db.prepare('SELECT kind FROM effect WHERE kind = ?').all('prime-reconcile')).toHaveLength(0)
+    host.dispose()
+  })
+})
+
 describe('the coordinator after a restart', () => {
   it('finds the segment and its reservation again after a restart', () => {
     const segment = reserve(host)

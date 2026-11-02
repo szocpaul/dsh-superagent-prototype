@@ -7,7 +7,7 @@ describe('the smoke fixture', () => {
   })
 
   it('exports the behaviour as a function', () => {
-    expect(typeof smoke).toBe('function')
+    expect(smoke).toBeTypeOf('function')
   })
 
   it('exposes the version one', () => {

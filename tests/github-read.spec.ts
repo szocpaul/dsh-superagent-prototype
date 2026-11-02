@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { Commands } from '../src/infra/commands.ts'
 import { testDeployment } from './fixtures/deployment.ts'
-import { readGithub, pullChecks } from '../src/sources/github-read.ts'
+import { readGithub, pullChecks, readMergeGuard } from '../src/sources/github-read.ts'
 
 const commands = new Commands(() => testDeployment(), {}, new AbortController().signal)
 afterEach(() => vi.restoreAllMocks())
@@ -65,4 +65,20 @@ it('reads an Issue or PR as its author, time, title, state, description and a PR
     head: { ref: 'agent/fix', sha: 'abc', repo: {} }, base: { ref: 'main' }, labels: [{ name: 'ui', color: 'fff' }], node_id: 'x', _links: {} })
   expect(await readGithub(commands, 'github/pulls/9')).toEqual({ number: 9, title: 'Fix the margin', state: 'open', draft: true, head: 'agent/fix',
     base: 'main', labels: ['ui'], id: '9', from: 'carol', at: '2026-09-09T00:00:00Z', text: 'Details', url: 'https://github.com/acme/widgets/pull/9' })
+})
+
+it('reads the merge guard from the branch protection and the permissions of the controller own identity', async () => {
+  const gh = vi.spyOn(commands, 'gh')
+    .mockResolvedValueOnce({ protected: true, protection: { enabled: true } })
+    .mockResolvedValueOnce({ permissions: { admin: false, maintain: false } })
+  expect(await readMergeGuard(commands, 'main')).toEqual({ branch: 'main', protectedBranch: true, admin: false, maintain: false })
+  expect(gh).toHaveBeenCalledWith(['api', 'repos/acme/widgets/branches/main'])
+  expect(gh).toHaveBeenCalledWith(['api', 'repos/acme/widgets'])
+})
+
+it('reports an unprotected branch and an administrative identity, so the delivery can refuse', async () => {
+  vi.spyOn(commands, 'gh')
+    .mockResolvedValueOnce({ protected: false })
+    .mockResolvedValueOnce({ permissions: { admin: true, maintain: false } })
+  expect(await readMergeGuard(commands, 'main')).toEqual({ branch: 'main', protectedBranch: false, admin: true, maintain: false })
 })

@@ -321,37 +321,39 @@ export async function readComment(commands: Commands, commentId: string): Promis
   }
 }
 
-/** The branch protection rules GitHub reports for one branch. */
-export interface BranchProtection {
-  /** The protected branch's name. */
+/** What the controller's own identity may do on the branch the result lands on. */
+export interface MergeGuard {
+  /** The branch the result lands on. */
   branch: string
-  /** Whether a pull request with enough reviews is required before merging. */
-  requiresReviews: boolean
-  /** Whether the rule applies to administrators as well. */
-  enforceAdmins: boolean
-  /** The number of approvals the rule demands. */
-  requiredApprovals: number
-  /** The names of the status checks the rule demands. */
-  requiredChecks: string[]
+  /** Whether the branch carries a server-enforced protection rule. */
+  protectedBranch: boolean
+  /** Whether the controller's identity is an administrator of the repository. */
+  admin: boolean
+  /** Whether the controller's identity may maintain the repository. */
+  maintain: boolean
 }
 
 /**
- * Reads the protection rules of one branch, so the controller can prove before launch that its own identity cannot merge.
+ * Reads the merge guard from the identity the controller actually has: the protection of the target branch and the
+ * controller's own permissions on the repository.
+ *
+ * The detailed rules of a branch need administrative access, and the controller deliberately does not have it: its
+ * identity is not an administrator of the repository, so the server answers 404 for them. The guard is therefore proven
+ * from what the controller's own identity may do: the target branch carries a protection rule, and the controller can
+ * neither administer nor maintain the repository, so it can neither change nor bypass that rule.
  */
-export async function readBranchProtection(commands: Commands, branch: string): Promise<BranchProtection> {
-  const protection = await commands.api(z.looseObject({
-    required_pull_request_reviews: z.looseObject({
-      required_approving_review_count: z.number().nullish(),
-      enforce_admins: z.boolean().nullish(),
-    }).nullish(),
-    required_status_checks: z.looseObject({ contexts: z.array(z.string()).nullish() }).nullish(),
-  }), `branches/${encodeURIComponent(branch)}/protection`)
-  const reviews = protection.required_pull_request_reviews
+export async function readMergeGuard(commands: Commands, branch: string): Promise<MergeGuard> {
+  const rules = await commands.api(z.looseObject({
+    protected: z.boolean().nullish(),
+    protection: z.looseObject({ enabled: z.boolean().nullish() }).nullish(),
+  }), `branches/${encodeURIComponent(branch)}`)
+  const repository = await commands.api(z.looseObject({
+    permissions: z.looseObject({ admin: z.boolean().nullish(), maintain: z.boolean().nullish() }).nullish(),
+  }), '')
   return {
     branch,
-    requiresReviews: !!reviews,
-    enforceAdmins: reviews?.enforce_admins === true,
-    requiredApprovals: reviews?.required_approving_review_count ?? 0,
-    requiredChecks: protection.required_status_checks?.contexts ?? [],
+    protectedBranch: rules.protected === true && rules.protection?.enabled !== false,
+    admin: repository.permissions?.admin === true,
+    maintain: repository.permissions?.maintain === true,
   }
 }

@@ -244,7 +244,9 @@ export class PrimeBridge {
    */
   reconcileOpenSegments(): void {
     for (const segment of this.host.store.bridge.segments.list()) {
-      if (['stopped', 'ready', 'blocked', 'failed'].includes(segment.phase)) continue
+      // A segment that already left the runner's phase is driven by its own effect, and an unknown delivery waits for
+      // an operator; reconciling it again would repeat the verification and the delivery without a new reason.
+      if (['stopped', 'ready', 'blocked', 'failed', 'unknown', 'verifying', 'gate_wait'].includes(segment.phase)) continue
       this.host.effects.enqueueSegment('prime-reconcile', segment.segmentId, segment.generation)
     }
   }
