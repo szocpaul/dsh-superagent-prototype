@@ -8,7 +8,10 @@
 /** The version of the disposable fixture. */
 export const SMOKE_VERSION = 1
 
+/** The string the fixture is named after. */
+const SMOKE = 'smoke'
+
 /** Returns the string the fixture is named after. */
 export function smoke(): string {
-  return 'smoke'
+  return SMOKE
 }
