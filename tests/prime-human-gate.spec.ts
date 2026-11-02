@@ -232,7 +232,8 @@ describe('the revision a gate commit must sit on', () => {
   })
 })
 describe('the continuation past a gate', () => {
-  it('ends the gated segment and reserves the next one, so the runner slot is free for it', async () => {
+  /** The gated segment and the continuation that the approved gate decision produces. */
+  const continuePastGate = async () => {
     const gated = manifest({
       tasks: [
         { id: 'T001', kind: 'automated', order: 0, text: 'Do the thing' },
@@ -252,11 +253,25 @@ describe('the continuation past a gate', () => {
     host.store.bridge.segments.save({ ...segment, phase: 'gate_wait', nextGateId: 'T002', taskIds: ['T001'] })
     await host.bridge.awaitGate(segment.segmentId)
     const segments = host.store.bridge.segments.byTicket('ticket-1')
+    return { host, segments, segment }
+  }
+
+  it('ends the gated segment and reserves the next one, so the runner slot is free for it', async () => {
+    const { host, segments, segment } = await continuePastGate()
     expect(segments.find(item => item.segmentId === segment.segmentId)?.phase).toBe('stopped')
     const next = segments.find(item => item.segmentId !== segment.segmentId)
     expect(next?.taskIds).toEqual(['T003'])
     // The continuation holds the runner slot; the gated segment released it.
     expect(host.store.bridge.segments.current()?.segmentId).toBe(next?.segmentId)
+    host.dispose()
+  })
+
+  it('builds the continuation on the commit the human made for the gate', async () => {
+    const { host, segments, segment } = await continuePastGate()
+    const next = segments.find(item => item.segmentId !== segment.segmentId)
+    // The gate commit sits on the branch of the run, so it is the revision the continuation has to build on.
+    expect(next?.baseRevision).toBe('b'.repeat(40))
+    expect(next?.baseRevision).not.toBe(segment.baseRevision)
     host.dispose()
   })
 })

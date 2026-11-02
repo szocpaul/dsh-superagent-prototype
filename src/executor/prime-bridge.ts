@@ -548,7 +548,10 @@ export class PrimeBridge {
         nextGateId: next.gate?.id ?? null,
         branch: segment.runner.branch,
         workspace: segment.runner.workspace,
-        baseRevision: segment.baseRevision,
+        // The continuation builds on the commit the human made for the gate: that commit sits on the branch of the
+        // run and carries the gate's checkbox, so it is the revision the continuation has to build on. The segment's
+        // own baseline is the revision from before the run, which the gate commit does not descend from.
+        baseRevision: decision.gateCommit ?? segment.baseRevision,
       })
     })
   }
