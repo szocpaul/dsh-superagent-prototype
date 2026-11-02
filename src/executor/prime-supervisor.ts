@@ -17,7 +17,12 @@ export interface RunEnvironment {
   start(plan: IsolationPlan, identity: SegmentRunnerIdentity): Promise<void>
   /** Cancels the exact private daemon and session of the run. */
   cancel(identity: SegmentRunnerIdentity): Promise<void>
-  /** Reads the process list of a cgroup; it throws when the cgroup cannot be read. */
+  /**
+   * Reads the process list of a cgroup.
+   *
+   * A cgroup that is gone holds no process, because the kernel removes a cgroup only when it is empty; a cgroup
+   * that exists but cannot be read throws, so the state of the run stays unknown.
+   */
   processes(cgroup: string): number[]
   /** Removes the run-owned service, socket, tmux server and scratch directory. */
   remove(identity: SegmentRunnerIdentity): Promise<string[]>

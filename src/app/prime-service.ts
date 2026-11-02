@@ -226,11 +226,16 @@ export function hostRunEnvironment(commands: Commands): RunEnvironment {
       mkdirSync(plan.workspace, { recursive: true })
     },
     async cancel(identity: SegmentRunnerIdentity): Promise<void> {
+      // A cgroup that is gone cannot hold a process, so there is nothing left to cancel.
+      if (!existsSync(identity.cgroup)) return
       const kill = join(identity.cgroup, 'cgroup.kill')
       if (!existsSync(kill)) throw new Error(`the cgroup of the run has no kill file: ${identity.cgroup}`)
       writeFileSync(kill, '1')
     },
     processes(cgroup: string): number[] {
+      // The kernel removes a cgroup only when it holds no process and no child cgroup, so a cgroup that is gone
+      // proves that the run holds no process. A cgroup that exists but cannot be read keeps the state unknown.
+      if (!existsSync(cgroup)) return []
       const file = join(cgroup, 'cgroup.procs')
       return readFileSync(file, 'utf8').split('\n').map(line => line.trim()).filter(Boolean).map(Number)
     },
