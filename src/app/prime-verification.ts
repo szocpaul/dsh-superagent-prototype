@@ -124,19 +124,21 @@ export async function verifySegment(options: {
   manifest: ApprovedManifest
   segment: BridgeSegment
   report: Parameters<typeof verify>[0]['report']
-  workspace: string
+  /** The run's own storage, where the report and the session of the run live; it is not a repository. */
+  storage: string
   assessHost?: AssessHost
 }): Promise<Awaited<ReturnType<typeof verify>>> {
-  const { commands, root, manifest, segment, report, workspace, assessHost } = options
-  const snapshot = await collectSnapshot(commands, workspace, manifest.allowedPaths)
+  const { commands, root, manifest, segment, report, storage, assessHost } = options
+  // The changed files are the ones of the repository the runner worked in; the run's own storage holds its report.
+  const snapshot = await collectSnapshot(commands, root, manifest.allowedPaths)
   const committer = revisionPort(commands, root)
   const verifier = verifierPort(commands, root)
-  const environment = verifierEnvironment(workspace)
+  const environment = verifierEnvironment(storage)
   const resultRevision = await createResultRevision(snapshot, manifest.allowedPaths, committer)
   const checks = await rerunChecks(manifest.checks, resultRevision, verifier, environment)
   const assessment = assessHost ? await assess(manifest, segment, 1, assessHost) : undefined
   return verify({
-    manifest, segment, report, workspace, commands, verifier, environment,
+    manifest, segment, report, workspace: root, commands, verifier, environment,
     committer,
     assessment,
   })

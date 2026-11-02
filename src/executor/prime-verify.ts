@@ -293,7 +293,7 @@ export interface VerifyOptions {
   segment: BridgeSegment
   /** The runner's report, which is data and never authority. */
   report: RunnerReport
-  /** The workspace the runner produced. */
+  /** The repository the runner worked in; its changed files are the state the runner produced. */
   workspace: string
   /** The repository adapter the controller reads the changed files with. */
   commands: Commands

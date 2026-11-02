@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { bytesDigest } from '../src/executor/prime-manifest.ts'
 import { revisionPort, verifierPort, verifierEnvironment } from '../src/app/prime-verification.ts'
+import { collectSnapshot } from '../src/executor/prime-verify.ts'
 import type { Commands } from '../src/infra/commands.ts'
 
 const exec = promisify(execFile)
@@ -74,6 +76,22 @@ describe('the host verification', () => {
         verifierEnvironment(root),
       )
       expect(outcome.exitCode).toBe(3)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reads the changed files of the repository the runner worked in', async () => {
+    const root = await gitRoot()
+    try {
+      mkdirSync(join(root, 'src'), { recursive: true })
+      writeFileSync(join(root, 'src', 'smoke.ts'), 'export const smoke = 1\n')
+      await exec('git', ['add', '.'], { cwd: root })
+      await exec('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=t', 'commit', '-m', 'base'], { cwd: root })
+      writeFileSync(join(root, 'src', 'smoke.ts'), 'export const smoke = 2\n')
+      const snapshot = await collectSnapshot(gitCommands(root), root, ['src'])
+      expect(snapshot.paths).toContain('src/smoke.ts')
+      expect(snapshot.files[0]?.sha256).toBe(bytesDigest(Buffer.from('export const smoke = 2\n')))
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

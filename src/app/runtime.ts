@@ -283,7 +283,7 @@ export class Runtime extends Service implements SourceHost {
           manifest,
           segment,
           report,
-          workspace,
+          storage: workspace,
         })
         return { runner: report, verification }
       },

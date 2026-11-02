@@ -6,7 +6,7 @@ describe('the smoke fixture', () => {
     expect(smoke()).toBe('smoke')
   })
 
-  it('has the version one', () => {
+  it('exposes the version one', () => {
     expect(SMOKE_VERSION).toBe(1)
   })
 })
