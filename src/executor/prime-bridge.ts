@@ -530,21 +530,27 @@ export class PrimeBridge {
     if (!decision) return undefined
     const quiescence = await runner.reconcile(segment)
     if (quiescence.stop !== 'stopped') return undefined
-    const tasks = taskLines(manifest)
+    // The human's gate commit changed exactly the gate's checkbox, and the decision record was made from that
+    // commit, so the gate counts as complete for the continuation.
+    const tasks = taskLines(manifest).map(task => task.id === decision.gateId ? { ...task, checked: true } : task)
     const next = nextSegment(tasks, decision.gateId!, decision)
     if (!next.ok) return undefined
-    const reserved = this.reserve({
-      ticketId: segment.ticketId,
-      assignmentId: segment.assignmentId,
-      manifest,
-      taskIds: next.segment.map(task => task.id),
-      nextGateId: next.gate?.id ?? null,
-      branch: segment.runner.branch,
-      workspace: segment.runner.workspace,
-      baseRevision: segment.baseRevision,
+    // The gate is approved and the segment is quiescent, so this segment ends here. It releases the runner slot in
+    // the same transaction that reserves the slot for the continuation; a segment that keeps the slot would leave the
+    // continuation waiting for a slot it can never take.
+    return store.atomic(() => {
+      this.phase(segment, 'stopped')
+      return this.reserve({
+        ticketId: segment.ticketId,
+        assignmentId: segment.assignmentId,
+        manifest,
+        taskIds: next.segment.map(task => task.id),
+        nextGateId: next.gate?.id ?? null,
+        branch: segment.runner.branch,
+        workspace: segment.runner.workspace,
+        baseRevision: segment.baseRevision,
+      })
     })
-    if (reserved) this.phase(segment, 'stopped')
-    return reserved
   }
 
   /** Records a failure of a segment with its cause and the action an operator must take. */

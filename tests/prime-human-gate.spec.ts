@@ -231,4 +231,34 @@ describe('the revision a gate commit must sit on', () => {
     host.dispose()
   })
 })
+describe('the continuation past a gate', () => {
+  it('ends the gated segment and reserves the next one, so the runner slot is free for it', async () => {
+    const gated = manifest({
+      tasks: [
+        { id: 'T001', kind: 'automated', order: 0, text: 'Do the thing' },
+        { id: 'T002', kind: 'human', order: 1, text: 'MANUAL GATE - Review the change' },
+        { id: 'T003', kind: 'automated', order: 2, text: 'Run the check' },
+      ],
+    })
+    const decision = {
+      approvalId: 'gate-1', kind: 'gate' as const, manifestId: manifestDigest(gated), manifestSha256: manifestDigest(gated),
+      ticketId: 'ticket-1', triggerId: 'trigger-1', policyVersion: 'policy-1', repositoryId: 4242,
+      commentId: 'comment-1', commentSha256: 'c'.repeat(64),
+      actor: { id: 7, login: 'octocat', type: 'User' as const }, at: '2026-11-01T00:00:00.000Z',
+      environmentApproved: true, decision: 'approved' as const, gateId: 'T002', gateCommit: 'b'.repeat(40),
+    }
+    const host = harness({ manifest: () => gated, gateApproval: () => decision, gateDecision: () => decision })
+    const segment = reserve(host)
+    host.store.bridge.segments.save({ ...segment, phase: 'gate_wait', nextGateId: 'T002', taskIds: ['T001'] })
+    await host.bridge.awaitGate(segment.segmentId)
+    const segments = host.store.bridge.segments.byTicket('ticket-1')
+    expect(segments.find(item => item.segmentId === segment.segmentId)?.phase).toBe('stopped')
+    const next = segments.find(item => item.segmentId !== segment.segmentId)
+    expect(next?.taskIds).toEqual(['T003'])
+    // The continuation holds the runner slot; the gated segment released it.
+    expect(host.store.bridge.segments.current()?.segmentId).toBe(next?.segmentId)
+    host.dispose()
+  })
+})
+
 import { harness, reserve, runnerReport, verification } from './fixtures/prime-bridge-host.ts'
