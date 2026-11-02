@@ -418,18 +418,22 @@ export function runnerAdapter(supervisor: PrimeSupervisor, deps: PrimeServiceDep
 
 /** The pull-request port over the deployment's GitHub CLI and git. */
 export function pullPort(commands: Commands, root: string): PullPort {
-  const api = async <T>(path: string, ...flags: string[]): Promise<T> => commands.api(path, ...flags) as Promise<T>
+  // The CLI answers with JSON text, so every answer is read as JSON before it is used.
+  const api = async <T>(path: string, ...flags: string[]): Promise<T> => JSON.parse(await commands.api(path, ...flags)) as T
   return {
     async branchHead(branch: string): Promise<string | undefined> {
       try { return (await commands.git(['rev-parse', `refs/heads/${branch}`], root)).trim() } catch { return undefined }
     },
     async createPull(input: CreatePullInput): Promise<PullRef> {
-      const body = JSON.stringify({ title: input.title, body: input.body, head: input.head, base: input.base, draft: input.draft })
-      return api<PullRef>('pulls', '-X', 'POST', '-f', body)
+      // Every field of the request is its own argument: the CLI sends the fields as they are, and a JSON body in one
+      // field would reach the server as a single string.
+      return api<PullRef>('pulls', '-X', 'POST',
+        '-f', `title=${input.title}`, '-f', `body=${input.body}`, '-f', `head=${input.head}`, '-f', `base=${input.base}`,
+        '-F', `draft=${input.draft}`)
     },
     async updatePull(number: number, input: UpdatePullInput): Promise<PullRef> {
-      const body = JSON.stringify({ title: input.title, body: input.body, draft: input.draft })
-      return api<PullRef>(`pulls/${number}`, '-X', 'PATCH', '-f', body)
+      return api<PullRef>(`pulls/${number}`, '-X', 'PATCH',
+        '-f', `title=${input.title}`, '-f', `body=${input.body}`, '-F', `draft=${input.draft}`)
     },
     async pushRef(branch: string, commit: string, expectedOldSha: string): Promise<{ ok: boolean; reason?: string }> {
       try {
@@ -440,7 +444,16 @@ export function pullPort(commands: Commands, root: string): PullPort {
       }
     },
     async pull(number: number): Promise<PullState> {
-      return api<PullState>(`pulls/${number}`)
+      const pull = await api<Record<string, unknown>>(`pulls/${number}`)
+      return {
+        state: String(pull.state ?? ''),
+        draft: pull.draft === true,
+        // The server names the auto-merge request on the pull request itself.
+        autoMerge: pull.auto_merge !== undefined && pull.auto_merge !== null,
+        head: String((pull.head as { ref?: string } | undefined)?.ref ?? ''),
+        base: String((pull.base as { ref?: string } | undefined)?.ref ?? ''),
+        url: String(pull.html_url ?? ''),
+      }
     },
     async branchProtection(branch: string): Promise<BranchProtection> {
       // The guard is read from the identity the controller has: the branch carries a protection rule, and the
