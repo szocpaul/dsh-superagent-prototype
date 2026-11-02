@@ -1041,9 +1041,10 @@ describe('feishu event consumer', () => {
   })
   /**
    * A bot CLI whose `event consume` behaves as `mode` says: `never` gets ready, `warn` warns once ready, `ready` stays up,
-   * and `flaky` exits after its first ready. It records each run and the PID of the latest.
+   * `flaky` exits after its first ready, `events` prints the event lines at once, `late` prints them a second later, and
+   * `late-ready` prints them first and becomes ready afterwards. It records each run and the PID of the latest.
    */
-  function cli(mode: 'never' | 'warn' | 'ready' | 'flaky' | 'events' | 'late'): string {
+  function cli(mode: 'never' | 'warn' | 'ready' | 'flaky' | 'events' | 'late' | 'late-ready'): string {
     const path = join(dir, 'lark-bot')
     writeFileSync(path, `#!/bin/sh
   [ "$1" = event ] || { echo '{"ok":true,"data":{}}'; exit 0; }
@@ -1055,6 +1056,7 @@ describe('feishu event consumer', () => {
     flaky) echo '[event] ready' >&2; [ "$n" -gt 1 ] && exec sleep 60; exit 1 ;;
     events) echo '[event] ready' >&2; cat '${dir}/events'; touch '${dir}/printed'; exec sleep 60 ;;
     late) echo '[event] ready' >&2; sleep 1; cat '${dir}/events'; touch '${dir}/printed'; exec sleep 60 ;;
+    late-ready) cat '${dir}/events'; sleep 1; echo '[event] ready' >&2; touch '${dir}/ready'; exec sleep 60 ;;
   esac
   `, { mode: 0o755 })
     return path
@@ -1094,6 +1096,18 @@ describe('feishu event consumer', () => {
     await vi.waitFor(() => expect(store.triggers.get(feishuTriggerId('om_3'))).toBeDefined(), until)
     expect(['om_1', 'om_2'].map(id => store.triggers.get(feishuTriggerId(id))?.meta.direct)).toEqual([false, true])
     expect(store.get(KV.feishu.chats)).toEqual({ oc_group: false, oc_dm: true })
+    expect(health.feishu).toMatchObject({ state: 'error', detail: expect.stringContaining('JSON') })
+    controller.abort(); await running; store.close()
+  }, 20_000)
+  it('keeps the error a malformed event reported when the consumer becomes ready afterwards', async () => {
+    writeFileSync(join(dir, 'events'), ['not json', event('om_4', 'oc_group', 'group')].join('\n') + '\n')
+    const { ctx, health, store } = consumerSource(cli('late-ready'))
+    running = runFeishu(ctx, controller.signal)
+    await vi.waitFor(() => expect(store.triggers.get(feishuTriggerId('om_4'))).toBeDefined(), until)
+    expect(health.feishu).toMatchObject({ state: 'error', detail: expect.stringContaining('JSON') })
+    // The consumer becomes ready a second later; that report must not erase the error the malformed line reported.
+    await vi.waitFor(() => expect(existsSync(join(dir, 'ready'))).toBe(true), until)
+    await new Promise(resolve => setTimeout(resolve, 300))
     expect(health.feishu).toMatchObject({ state: 'error', detail: expect.stringContaining('JSON') })
     controller.abort(); await running; store.close()
   }, 20_000)

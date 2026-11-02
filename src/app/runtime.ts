@@ -52,6 +52,9 @@ import { PrimeSupervisor } from '../executor/prime-supervisor.ts'
 import { localIsolationRunner } from '../infra/prime-isolation.ts'
 import type { ApprovedManifest } from '../executor/prime-model.ts'
 import { readRunnerReport, verifySegment } from './prime-verification.ts'
+import type { AssessHost } from '../executor/prime-verify.ts'
+import { bytesDigest } from '../executor/prime-manifest.ts'
+import { existsSync, readFileSync } from 'node:fs'
 import { manifestDigest } from '../executor/prime-manifest.ts'
 import { allowlistOf, createPrimeBridge, deliveryAdapter, hostPreflightHost, hostRunEnvironment, manifestKey,
   quotaAdapter, requestRun, runnerAdapter, type PrimeServiceDeps } from './prime-service.ts'
@@ -59,6 +62,9 @@ import { allowlistOf, createPrimeBridge, deliveryAdapter, hostPreflightHost, hos
 // Source plugins interact with dsh-superagent exclusively through the `SourceHost` service interface.
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
 const now = (): string => new Date().toISOString()
+
+/** How often the bridge reconciles the runs it holds; the signal of a runner is only a hint. */
+const RECONCILIATION_INTERVAL_MS = 30_000
 
 /**
  * Composition root of dsh-superagent that connects `Store`, `Setup`, `Engine`, `SourceRegistry`, `Effects`, `Outbox`, `Passes`, `Sessions`, `Settings`, `Prompts`, `DshExecutor`, and `MasterAssessor`.
@@ -92,6 +98,8 @@ export class Runtime extends Service implements SourceHost {
   private readonly disposers: (() => void)[] = []
   private releaseLock?: () => Promise<void>
   private closingFlag = false
+  /** The timer that reconciles the runs of the bridge, so a finished run is noticed without a restart. */
+  private reconciliation?: NodeJS.Timeout
   private stopping?: Promise<void>
   private readonly sourceDeps: SourceContextDeps
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
@@ -236,7 +244,12 @@ export class Runtime extends Service implements SourceHost {
         deploymentId: this.machine.stateDir,
         runner: { cli: 'prime-agent', version: process.env.DSH_PRIME_VERSION ?? '0.10.1' },
         model: { provider: process.env.DSH_PRIME_PROVIDER ?? 'unknown', id: process.env.DSH_PRIME_MODEL ?? 'unknown' },
-        isolation: { backend: 'bubblewrap', writablePaths: [], network: 'none', allowedEndpoints: [] },
+        isolation: {
+          backend: 'bubblewrap',
+          writablePaths: [],
+          network: process.env.DSH_PRIME_NETWORK === 'allowlist' ? 'allowlist' : 'none',
+          allowedEndpoints: (process.env.DSH_PRIME_ENDPOINTS ?? '').split(',').map(item => item.trim()).filter(Boolean),
+        },
         credentials: process.env.DSH_PRIME_CREDENTIALS?.split(',').map(item => item.trim()).filter(Boolean) ?? [],
         quota: { warnTokens: Number(process.env.DSH_PRIME_WARN_TOKENS ?? 0), stopTokens: Number(process.env.DSH_PRIME_STOP_TOKENS ?? 0),
           maxWallMs: Number(process.env.DSH_PRIME_MAX_WALL_MS ?? 0), meteringScope: 'session' },
@@ -250,7 +263,7 @@ export class Runtime extends Service implements SourceHost {
     this.primeDeps = deps
     return createPrimeBridge(deps, {
       preflightHost: () => hostPreflightHost(deps),
-      runner: () => runnerAdapter(new PrimeSupervisor(localIsolationRunner, hostRunEnvironment(deps.commands()))),
+      runner: () => runnerAdapter(new PrimeSupervisor(localIsolationRunner, hostRunEnvironment(deps.commands())), deps),
       verify: () => runtime.verifyAdapter(),
       delivery: () => deliveryAdapter(deps, ledger),
       quota: () => quotaAdapter(deps),
@@ -273,9 +286,47 @@ export class Runtime extends Service implements SourceHost {
           manifest,
           segment,
           report,
-          workspace,
+          storage: workspace,
+          assessHost: this.assessmentHost(),
         })
         return { runner: report, verification }
+      },
+    }
+  }
+  /**
+   * The controller's own convergence assessment of a segment.
+   *
+   * The assessment reads the result of the run and reports what it finds as proposals: a task the run did not report
+   * as completed, and a file whose content the run described differently. It never changes the approved scope and it
+   * never adds a task.
+   */
+  private assessmentHost(): AssessHost {
+    const runtime = this
+    return {
+      async assessOnScratch(request) {
+        const findings: { id: string; summary: string }[] = []
+        const root = runtime.repositoryRoot()
+        const report = readRunnerReport(request.workspace, {
+          segmentId: request.segmentId ?? '',
+          generation: request.generation ?? 0,
+          stopEpoch: request.stopEpoch ?? 0,
+          manifestSha256: request.manifestSha256,
+        })
+        for (const id of request.taskIds) {
+          if (report.completedTaskIds.includes(id)) continue
+          findings.push({ id: `task-${id}`, summary: `the run did not report the task ${id} as completed` })
+        }
+        for (const file of report.files) {
+          const full = join(root, file.path)
+          if (!existsSync(full)) {
+            findings.push({ id: `file-${file.path}`, summary: `the report names the file ${file.path}, which the workspace does not hold` })
+            continue
+          }
+          if (bytesDigest(readFileSync(full)) !== file.sha256) {
+            findings.push({ id: `file-${file.path}`, summary: `the report does not describe the current content of ${file.path}` })
+          }
+        }
+        return { findings }
       },
     }
   }
@@ -304,6 +355,10 @@ export class Runtime extends Service implements SourceHost {
     this.bridge?.install()
     // The bridge reconciles the segments it finds before any launch effect may dispatch.
     this.bridge?.reconcileOpenSegments()
+    // A run that ends is noticed by a low-frequency reconciliation: the runner's own signal is only a hint, and the
+    // startup reconciliation alone would leave a finished run waiting for the next restart.
+    this.reconciliation = setInterval(() => this.bridge?.reconcileOpenSegments(), RECONCILIATION_INTERVAL_MS)
+    this.reconciliation.unref()
     this.runtimeHealth.set({ state: 'ready', detail: 'Orchestrator is ready', at: now() })
   }
   private httpHost(): HttpHost {
@@ -318,7 +373,8 @@ export class Runtime extends Service implements SourceHost {
   /** Idempotent stop; concurrent or repeated calls share the same shutdown promise. */
   stop(): Promise<void> { return this.stopping ??= this.shutdown() }
   private async shutdown(): Promise<void> {
-    this.closingFlag = true; const passes = this.passes.stop(); this.stopped.abort()
+    this.closingFlag = true; if (this.reconciliation) { clearInterval(this.reconciliation); this.reconciliation = undefined }
+    const passes = this.passes.stop(); this.stopped.abort()
     try {
       this.assessor.stop()
       const ids = [this.masterId, ...this.store.tickets.list().map(ticket => workerSessionId(ticket.id))]

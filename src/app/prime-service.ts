@@ -6,22 +6,27 @@
  */
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { key } from '../core/ids.ts'
 import type { OutboundMessage, Ticket } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
-import { isolationPlan, type IsolationPlan } from '../infra/prime-isolation.ts'
+import { isolationPlan, resolveCommand, type IsolationPlan } from '../infra/prime-isolation.ts'
 import { PrimeSupervisor, type RunEnvironment } from '../executor/prime-supervisor.ts'
+import { readMergeGuard } from '../sources/github-read.ts'
 import { deliver as deliverPull, type BranchProtection, type CreatePullInput, type DeliveryLedger, type PullPort,
   type PullRef, type PullState, type UpdatePullInput } from '../executor/prime-delivery.ts'
 import { QuotaMonitor, type GuardIdentity } from '../executor/prime-quota.ts'
 import { buildManifest, manifestDigest, type ManifestSource } from '../executor/prime-manifest.ts'
+import { parseRunnerReport, REPORT_FILE, REPORT_MARKDOWN_FILE } from '../executor/prime-report.ts'
+import type { RunnerReport } from '../executor/prime-model.ts'
 import { buildLaunchInvocation, AUTONOMOUS_FLAGS } from '../executor/prime-launch.ts'
 import { preflight, type PreflightHost } from '../executor/prime-preflight.ts'
 import { approvalEvidence, approvalIsCurrent, approveRun, denyRun, verifyGateCommit, verifyGateDecision, type AccountType,
   type ApprovalEvidence, type ApprovalSource } from './prime-approval.ts'
-import { readCommit } from '../sources/github-read.ts'
+import { checkoutRunBranch } from './prime-verification.ts'
+import { readBranchHead, readCommit } from '../sources/github-read.ts'
 import { policyVersion } from '../policy.ts'
 import { z } from 'zod'
 import { PrimeBridge, type ApprovalPort, type BridgeHost, type DeliveryOutcome, type DeliveryPort, type PreflightOutcome,
@@ -224,15 +229,28 @@ export function hostRunEnvironment(commands: Commands): RunEnvironment {
       identity.cgroup = `/sys/fs/cgroup${cgroup}`
       mkdirSync(dirname(identity.socket), { recursive: true })
       mkdirSync(plan.workspace, { recursive: true })
+      mkdirSync(plan.storage, { recursive: true })
     },
     async cancel(identity: SegmentRunnerIdentity): Promise<void> {
+      // A cgroup that is gone cannot hold a process, so there is nothing left to cancel.
+      if (!existsSync(identity.cgroup)) return
       const kill = join(identity.cgroup, 'cgroup.kill')
       if (!existsSync(kill)) throw new Error(`the cgroup of the run has no kill file: ${identity.cgroup}`)
       writeFileSync(kill, '1')
     },
-    processes(cgroup: string): number[] {
+    async adopt(cgroup: string, pid: number): Promise<void> {
+      // The cgroup takes the process and everything it spawns, so the run's stop reaches the whole tree.
+      writeFileSync(join(cgroup, 'cgroup.procs'), `${pid}\n`)
+    },
+    async processes(cgroup: string, unit?: string): Promise<number[]> {
+      // The kernel removes a cgroup only when it holds no process and no child cgroup, so a cgroup that is gone
+      // proves that the run holds no process. A cgroup that exists but cannot be read keeps the state unknown.
+      if (!existsSync(cgroup)) return []
       const file = join(cgroup, 'cgroup.procs')
-      return readFileSync(file, 'utf8').split('\n').map(line => line.trim()).filter(Boolean).map(Number)
+      const pids = readFileSync(file, 'utf8').split('\n').map(line => line.trim()).filter(Boolean).map(Number)
+      // The unit's own placeholder keeps the cgroup alive; the run's processes are the others.
+      const placeholder = unit ? await mainPidOf(commands, unit) : undefined
+      return placeholder ? pids.filter(pid => pid !== placeholder) : pids
     },
     async remove(identity: SegmentRunnerIdentity): Promise<string[]> {
       const removed: string[] = []
@@ -246,20 +264,139 @@ export function hostRunEnvironment(commands: Commands): RunEnvironment {
   }
 }
 
+/** How long the runner may take to report its durable session identity; its kernel is set up first. */
+const IDENTITY_TIMEOUT_MS = 600_000
+
+/** The process the run's own service unit keeps alive, so the cgroup of the run exists. */
+async function mainPidOf(commands: Commands, unit: string): Promise<number | undefined> {
+  const name = unit.endsWith('.service') ? unit : `${unit}.service`
+  try {
+    const shown = await commands.run('systemctl', ['--user', 'show', name, '--property=MainPID', '--value'])
+    const pid = Number(shown.trim())
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The model configuration the run uses inside the confinement.
+ *
+ * The runner reads its providers from its own home, and the confinement masks the operator's home. Without a
+ * configuration of its own the runner falls back to the model definition it ships with, which names another
+ * endpoint for the provider, and the model call fails. The controller therefore writes the approved provider and
+ * model into the run's own home, with the credential named by its environment variable and never by its value.
+ */
+export function writeRunnerModel(storage: string, manifest: ApprovedManifest): string | undefined {
+  const source = process.env.DSH_PRIME_MODELS_FILE ?? ''
+  if (!source) return undefined
+  const path = source.startsWith('~') ? join(homedir(), source.slice(1)) : source
+  let config: { providers?: Record<string, { models?: unknown[]; apiKey?: string }> }
+  try {
+    config = JSON.parse(readFileSync(path, 'utf8')) as typeof config
+  } catch {
+    return undefined
+  }
+  const provider = config.providers?.[manifest.environment.model.provider]
+  if (!provider) return undefined
+  const models = (provider.models ?? []).filter(model => (model as { id?: string }).id === manifest.environment.model.id)
+  if (!models.length) return undefined
+  const credential = process.env.DSH_PRIME_CREDENTIAL_ENV ?? ''
+  const target = join(storage, '.prime', 'agent')
+  mkdirSync(target, { recursive: true })
+  const file = join(target, 'models.json')
+  writeFileSync(file, JSON.stringify({
+    providers: {
+      [manifest.environment.model.provider]: {
+        ...provider,
+        apiKey: credential || provider.apiKey,
+        models,
+      },
+    },
+  }, null, 2))
+  return file
+}
+
+/** The report of a finished run, when the run wrote one that belongs to the segment. */
+function runnerReport(segment: BridgeSegment): RunnerReport | undefined {
+  const file = join(segment.runner.workspace, REPORT_FILE)
+  if (!existsSync(file)) return undefined
+  try {
+    return parseRunnerReport(readFileSync(file, 'utf8'), {
+      segmentId: segment.segmentId,
+      generation: segment.generation,
+      stopEpoch: segment.stopEpoch,
+      manifestSha256: segment.manifestId,
+      ticketId: segment.ticketId,
+      assignmentId: segment.assignmentId,
+    })
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The commands the runner's own tooling needs inside the confinement.
+ *
+ * The runner's kernel is set up by the deployment's own tool manager, and the confinement binds it read-only, so the
+ * runner can start the tool its only interface runs on.
+ */
+export function runnerTools(): string[] {
+  return (process.env.DSH_PRIME_RUNNER_TOOLS ?? '').split(',').map(item => item.trim()).filter(Boolean)
+}
+
+/**
+ * The credential the operator approved for the run, in the environment the runner sees.
+ *
+ * The manifest names the credential by category, never by value; the deployment names the environment variable
+ * that holds it, and only the run the operator approved receives it.
+ */
+export function runCredential(): Record<string, string> {
+  const name = process.env.DSH_PRIME_CREDENTIAL_ENV ?? ''
+  const value = name ? process.env[name] : undefined
+  return name && value ? { [name]: value } : {}
+}
+
 /** The runner adapter: it launches, stops, and reconciles the run through the supervisor. */
-export function runnerAdapter(supervisor: PrimeSupervisor): RunnerPort {
+export function runnerAdapter(supervisor: PrimeSupervisor, deps: PrimeServiceDeps): RunnerPort {
   return {
     async launch(segment: BridgeSegment, manifest: ApprovedManifest): Promise<{ sessionId?: string; sessionFile?: string }> {
+      // The runner works in the repository itself, so the checkout has to hold the branch of the run: a continuation
+      // has to see the revision the previous segment published, and the revision the controller creates later has to
+      // sit on that same branch.
+      const commands = deps.commands()
+      const root = deps.repositoryRoot()
+      await checkoutRunBranch(async args => (await commands.git(args, root)).trim(), segment.runner.branch)
       const barrierPath = join(segment.runner.workspace, '.prime-bridge-barrier')
+      const sessionDir = join(segment.runner.workspace, 'session')
       const invocation = buildLaunchInvocation(manifest, {
         taskIds: segment.taskIds,
         nextGateId: segment.nextGateId ?? undefined,
         barrier: { path: barrierPath, release: `${segment.segmentId}:${segment.generation}` },
+        reportPath: join(segment.runner.workspace, REPORT_FILE),
+        markdownPath: join(segment.runner.workspace, REPORT_MARKDOWN_FILE),
+        sessionDir,
+        bindings: {
+          ticketId: segment.ticketId,
+          assignmentId: segment.assignmentId,
+          segmentId: segment.segmentId,
+          generation: segment.generation,
+          stopEpoch: segment.stopEpoch,
+          manifestSha256: manifestDigest(manifest),
+          baselineRevision: manifest.baselineCommit,
+          outcome: segment.nextGateId ? 'gate' : 'complete',
+        },
       })
-      const plan = isolationPlan(manifest, segment.runner.workspace, {
+      const plan = isolationPlan(manifest, deps.repositoryRoot(), {
         argv: invocation.argv,
         segmentId: segment.segmentId,
+        storage: segment.runner.workspace,
+        sessionDir,
+        env: { ...runCredential(), IDENTITY_TIMEOUT_MS: String(IDENTITY_TIMEOUT_MS) },
+        tools: runnerTools(),
       })
+      // The runner reads its model configuration from its own home, which is the run's storage inside the confinement.
+      writeRunnerModel(plan.storage, manifest)
       const result = await supervisor.launch(plan, segment.runner)
       // The barrier is released only after the run's identities are known, so the runner cannot begin work
       // before the controller can reconcile it.
@@ -274,6 +411,9 @@ export function runnerAdapter(supervisor: PrimeSupervisor): RunnerPort {
       return {
         running: state.status === 'busy',
         stop: state.status === 'quiescent' ? 'stopped' : state.status === 'busy' ? 'unconfirmed' : 'unknown',
+        // A run that ended writes its report into the run's own storage; the reconciliation reads it there, and a
+        // report that does not belong to this segment is no report at all.
+        report: runnerReport(segment),
       }
     },
     async cleanup(segment: BridgeSegment, stopConfirmed: boolean): Promise<void> {
@@ -285,18 +425,24 @@ export function runnerAdapter(supervisor: PrimeSupervisor): RunnerPort {
 
 /** The pull-request port over the deployment's GitHub CLI and git. */
 export function pullPort(commands: Commands, root: string): PullPort {
-  const api = async <T>(path: string, ...flags: string[]): Promise<T> => commands.api(path, ...flags) as Promise<T>
+  // The CLI answers with JSON text, so every answer is read as JSON before it is used.
+  const api = async <T>(path: string, ...flags: string[]): Promise<T> => JSON.parse(await commands.api(path, ...flags)) as T
   return {
     async branchHead(branch: string): Promise<string | undefined> {
-      try { return (await commands.git(['rev-parse', `refs/heads/${branch}`], root)).trim() } catch { return undefined }
+      // The head that matters is the one on the server: the local branch may sit on a revision the server never saw,
+      // and a branch the server does not know yet has no head that could have moved.
+      try { return await readBranchHead(commands, branch) } catch { return undefined }
     },
     async createPull(input: CreatePullInput): Promise<PullRef> {
-      const body = JSON.stringify({ title: input.title, body: input.body, head: input.head, base: input.base, draft: input.draft })
-      return api<PullRef>('pulls', '-X', 'POST', '-f', body)
+      // Every field of the request is its own argument: the CLI sends the fields as they are, and a JSON body in one
+      // field would reach the server as a single string.
+      return api<PullRef>('pulls', '-X', 'POST',
+        '-f', `title=${input.title}`, '-f', `body=${input.body}`, '-f', `head=${input.head}`, '-f', `base=${input.base}`,
+        '-F', `draft=${input.draft}`)
     },
     async updatePull(number: number, input: UpdatePullInput): Promise<PullRef> {
-      const body = JSON.stringify({ title: input.title, body: input.body, draft: input.draft })
-      return api<PullRef>(`pulls/${number}`, '-X', 'PATCH', '-f', body)
+      return api<PullRef>(`pulls/${number}`, '-X', 'PATCH',
+        '-f', `title=${input.title}`, '-f', `body=${input.body}`, '-F', `draft=${input.draft}`)
     },
     async pushRef(branch: string, commit: string, expectedOldSha: string): Promise<{ ok: boolean; reason?: string }> {
       try {
@@ -306,11 +452,36 @@ export function pullPort(commands: Commands, root: string): PullPort {
         return { ok: false, reason: String(error) }
       }
     },
+    async pullForBranch(branch: string): Promise<number | undefined> {
+      // The pull request of a branch is found on the server: the ledger of the controller is memory, and a restart
+      // empties it, while the pull request stays open.
+      const query = `pulls?head=${encodeURIComponent(branch)}&state=open`
+      const found = await api<{ number: number }[]>(query).catch(() => [] as { number: number }[])
+      return found[0]?.number
+    },
+    async treeOf(revision: string): Promise<string | undefined> {
+      try { return (await commands.git(['rev-parse', `${revision}^{tree}`], root)).trim() } catch { return undefined }
+    },
     async pull(number: number): Promise<PullState> {
-      return api<PullState>(`pulls/${number}`)
+      const pull = await api<Record<string, unknown>>(`pulls/${number}`)
+      return {
+        state: String(pull.state ?? ''),
+        draft: pull.draft === true,
+        // The server names the auto-merge request on the pull request itself.
+        autoMerge: pull.auto_merge !== undefined && pull.auto_merge !== null,
+        head: String((pull.head as { ref?: string } | undefined)?.ref ?? ''),
+        base: String((pull.base as { ref?: string } | undefined)?.ref ?? ''),
+        url: String(pull.html_url ?? ''),
+      }
     },
     async branchProtection(branch: string): Promise<BranchProtection> {
-      return api<BranchProtection>(`branches/${encodeURIComponent(branch)}/protection`)
+      // The guard is read from the identity the controller has: the branch carries a protection rule, and the
+      // controller can neither administer nor maintain the repository, so it can neither change nor bypass it.
+      const guard = await readMergeGuard(commands, branch)
+      return {
+        required: guard.protectedBranch,
+        forbidsMerge: !guard.admin && !guard.maintain,
+      }
     },
   }
 }
@@ -360,7 +531,7 @@ export function quotaAdapter(deps: PrimeServiceDeps): QuotaPort {
     if (existing) return existing
     const identity: GuardIdentity = {
       entryName: segment.quotaGuardId,
-      sessionFile: segment.runner.sessionFile ?? join(segment.runner.workspace, 'session.json'),
+      sessionFile: segment.runner.sessionFile ?? join(segment.runner.workspace, 'session'),
       logPath: join(segment.runner.workspace, 'quota.log'),
       alertFile: join(segment.runner.workspace, 'quota-alert.jsonl'),
       cgroup: segment.runner.cgroup,
@@ -427,7 +598,15 @@ export function hostPreflightHost(deps: PrimeServiceDeps): PreflightHost {
     async checks(): Promise<{ name: string; ok: boolean; detail: string }[]> {
       const manifest = deps.manifests().at(0)
       const checks = manifest?.checks ?? []
-      return checks.map(check => ({ name: check.name, ok: true, detail: `the check ${check.argv.join(' ')} is approved` }))
+      // A check that names a command the host does not have could not run inside the confinement either, so the
+      // launch is blocked while the operator can install it or approve a different check.
+      return checks.map(check => {
+        const program = check.argv[0] ?? ''
+        const resolved = resolveCommand(program)
+        return resolved
+          ? { name: check.name, ok: true, detail: `the check ${check.argv.join(' ')} is approved and its command runs on the host` }
+          : { name: check.name, ok: false, detail: `the command of the check ${check.argv.join(' ')} is not installed on the host` }
+      })
     },
     async confinement(): Promise<{ ok: boolean; detail: string }> {
       const environment = hostRunEnvironment(commands)
@@ -499,7 +678,8 @@ function approvalSource(deps: PrimeServiceDeps, ticketId: string): ApprovalSourc
     policyVersion: () => policyVersion(deps.settings()),
     async fetchComment(commentId: string): Promise<ApprovalEvidence | undefined> {
       if (!number) return undefined
-      const row = await deps.commands().api(CommentRow, `issues/${number}/comments/${commentId}`)
+      // GitHub serves one issue comment under issues/comments/<id>; the route that carries the issue number is not one.
+      const row = await deps.commands().api(CommentRow, `issues/comments/${commentId}`)
       if (!row.user) return undefined
       return {
         commentId: String(row.id),
@@ -583,7 +763,7 @@ export async function findGateApproval(deps: PrimeServiceDeps, ticketId: string,
         commitSha: command[5]!,
         editorLogin: verified.author.login,
         policyVersion: policyVersion(deps.settings()),
-      })
+      }, deps.store.bridge.approvals)
     } catch (error) {
       void error
     }

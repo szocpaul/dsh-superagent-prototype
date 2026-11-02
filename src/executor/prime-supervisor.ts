@@ -5,6 +5,8 @@
  * runner, and answers whether a stop is confirmed. It fails closed: an unsupported host, an unproven quiescence,
  * or a missing durable session identity stops the run instead of producing a claimed success.
  */
+import { readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { buildBwrapArgs, IsolationError } from '../infra/prime-isolation.ts'
 import type { IsolationPlan, IsolationProcess, IsolationRunner } from '../infra/prime-isolation.ts'
 import type { SegmentRunnerIdentity } from './prime-model.ts'
@@ -17,8 +19,15 @@ export interface RunEnvironment {
   start(plan: IsolationPlan, identity: SegmentRunnerIdentity): Promise<void>
   /** Cancels the exact private daemon and session of the run. */
   cancel(identity: SegmentRunnerIdentity): Promise<void>
-  /** Reads the process list of a cgroup; it throws when the cgroup cannot be read. */
-  processes(cgroup: string): number[]
+  /**
+   * Reads the process list of a cgroup.
+   *
+   * A cgroup that is gone holds no process, because the kernel removes a cgroup only when it is empty; a cgroup
+   * that exists but cannot be read throws, so the state of the run stays unknown.
+   */
+  processes(cgroup: string, unit?: string): Promise<number[]>
+  /** Moves a process into the run's cgroup, so that the run's stop reaches it. */
+  adopt(cgroup: string, pid: number): Promise<void>
   /** Removes the run-owned service, socket, tmux server and scratch directory. */
   remove(identity: SegmentRunnerIdentity): Promise<string[]>
 }
@@ -74,6 +83,24 @@ const SESSION_ID = /session[_\s-]?id\s*[:=]\s*"?([^\s"]+)"?/i
 const SESSION_FILE = /session[_\s-]?file\s*[:=]\s*"?([^\s"]+)"?/i
 
 /**
+ * The session a runner wrote into its own session directory.
+ *
+ * The runner names the file after its session, so the directory is where its identity is found when the runner does
+ * not announce it in its output.
+ */
+export function sessionOfDirectory(directory: string): { sessionId?: string; sessionFile?: string } {
+  try {
+    for (const name of readdirSync(directory).sort()) {
+      if (!name.endsWith('.jsonl')) continue
+      return { sessionId: name.slice(0, -'.jsonl'.length), sessionFile: join(directory, name) }
+    }
+  } catch {
+    // The directory does not exist yet, so the runner has not written its session.
+  }
+  return {}
+}
+
+/**
  * Reads the durable session identity out of the output of a runner.
  *
  * The runner may report it as a JSON line or as `session id:` and `session file:` lines; both are read, and a line
@@ -124,9 +151,11 @@ export class PrimeSupervisor {
     // The runner is a long-running process: it is started in the background and its durable identity is awaited,
     // rather than waiting for it to end. A run that ends before it reports an identity failed to start.
     const process = this.runner.spawn(argv, { cwd: plan.workspace, env: plan.env })
+    // The runner joins the run's own cgroup, so the run's stop empties it and the runner's death empties it too.
+    await this.environment.adopt(identity.cgroup, process.pid)
     const configured: number = Number(plan.env.IDENTITY_TIMEOUT_MS)
     const timeoutMs: number = Number.isFinite(configured) && configured > 0 ? configured : IDENTITY_TIMEOUT_MS
-    const session = await this.awaitSessionIdentity(process, timeoutMs)
+    const session = await this.awaitSessionIdentity(plan, process, timeoutMs)
     if (!session.sessionId || !session.sessionFile) {
       process.kill(9)
       throw new IsolationError('the runner reported no durable session identity, so the run cannot be reconciled later')
@@ -140,11 +169,15 @@ export class PrimeSupervisor {
    * The runner prints the identity once it starts. A runner that ends without one failed, and the wait ends with
    * the reason it gave.
    */
-  private async awaitSessionIdentity(process: IsolationProcess, timeoutMs: number): Promise<{ sessionId?: string; sessionFile?: string }> {
+  private async awaitSessionIdentity(plan: IsolationPlan, process: IsolationProcess, timeoutMs: number): Promise<{ sessionId?: string; sessionFile?: string }> {
     const deadline = Date.now() + timeoutMs
     for (;;) {
       const found = parseSessionIdentity(process.output())
       if (found.sessionId && found.sessionFile) return found
+      // The runner writes its session into the run's own directory and names the file after it, so the identity is
+      // found there even when the runner does not announce it in its output.
+      const written = sessionOfDirectory(plan.sessionDir)
+      if (written.sessionId && written.sessionFile) return written
       if (process.ended()) {
         const found = parseSessionIdentity(process.output())
         if (found.sessionId && found.sessionFile) return found
@@ -185,7 +218,7 @@ export class PrimeSupervisor {
   async quiescence(identity: SegmentRunnerIdentity): Promise<QuiescenceVerdict> {
     let processes: number[] | null
     try {
-      processes = this.environment.processes(identity.cgroup)
+      processes = await this.environment.processes(identity.cgroup, identity.serviceUnit)
     } catch {
       return { status: 'unknown', reason: `the cgroup ${identity.cgroup} cannot be read, so the state of the run is unknown`, processes: null }
     }

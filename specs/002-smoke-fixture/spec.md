@@ -55,11 +55,12 @@ until an authorized human decision.
 ### Functional Requirements
 
 - **FR-001**: `src/smoke.ts` MUST export a function that returns the string
-  `smoke`.
-- **FR-002**: `tests/smoke.spec.ts` MUST verify that function.
+  `smoke`, and the constant `SMOKE_VERSION` with the value `1`.
+- **FR-002**: `tests/smoke.spec.ts` MUST verify that function and the constant.
 - **FR-003**: The approved check `pnpm exec vitest run tests/smoke.spec.ts` MUST
   exit with code 0 against the exact revision the controller created.
-- **FR-004**: Only `src/smoke.ts` and `tests/smoke.spec.ts` may change.
+- **FR-004**: Only `src/smoke.ts` and `tests/smoke.spec.ts` may change. The run
+  completes the two files, so the result differs from the baseline.
 
 ### Key Entities
 

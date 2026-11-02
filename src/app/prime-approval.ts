@@ -337,10 +337,11 @@ export interface GateDecisionRequest {
 
 /**
  * Verifies the decision comment of one gate: it must name the gate, the manifest digest, and the full gate commit SHA,
- * and it must come from the same currently allowlisted human who made the gate edit.
+ * and it must come from the same currently allowlisted human who made the gate edit. The verified decision is recorded,
+ * so the continuation past the gate finds it bound to the gate; a repeated poll answers with the record it already made.
  * @throws ApprovalError when any of these checks fails; the message names what is missing.
  */
-export async function verifyGateDecision(source: GateDecisionSource, request: GateDecisionRequest): Promise<ApprovalRecord> {
+export async function verifyGateDecision(source: GateDecisionSource, request: GateDecisionRequest, store?: ApprovalStore): Promise<ApprovalRecord> {
   const evidence = await source.fetchComment(request.commentId)
   if (!evidence) throw new ApprovalError(`The decision comment ${request.commentId} no longer exists`)
   if (evidence.actor.type !== 'User')
@@ -360,7 +361,7 @@ export async function verifyGateDecision(source: GateDecisionSource, request: Ga
     throw new ApprovalError(`The decision names commit ${command.commitSha}, not the gate commit ${request.commitSha}`)
   if (source.policyVersion() !== request.policyVersion)
     throw new ApprovalError(`The policy version changed from ${request.policyVersion} to ${source.policyVersion()}`)
-  return {
+  const record: ApprovalRecord = {
     approvalId: randomUUID(),
     kind: 'gate',
     manifestId: request.manifestSha256,
@@ -378,4 +379,9 @@ export async function verifyGateDecision(source: GateDecisionSource, request: Ga
     gateId: request.gateId,
     gateCommit: request.commitSha,
   }
+  const recorded = store?.byTicket(request.ticketId)
+    .find(item => item.kind === 'gate' && item.commentId === request.commentId && item.decision === 'approved')
+  if (recorded) return recorded
+  store?.save(record)
+  return record
 }

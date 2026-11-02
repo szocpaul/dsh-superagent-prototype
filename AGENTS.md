@@ -36,12 +36,34 @@ the disposable feature `specs/002-smoke-fixture`. The plan is in
 `specs/001-prime-runner-bridge/t054-plan.md`; the operator's steps are in
 `specs/001-prime-runner-bridge/operator-steps.md`.
 
-**The state at the end of 2026-11-01**: the Ticket `8b43e5eb` waits for the
-operator's approval. Its manifest names the writable paths `src/smoke.ts` and
-`tests/smoke.spec.ts`, the checks `pnpm run typecheck` and `pnpm run test`, the
-tasks `T001` to `T005` with `T003` as the human gate, and the environment digest
-`8947a897`. Every comment on issue #4 was deleted afterwards by the operator's own
-account, so the issue is empty.
+**The state at the end of 2026-11-02 (evening)**: the smoke has found and fixed
+**fourteen** defects in the bridge's runner launch path, which had never been
+exercised. The whole chain now works up to the delivery:
+
+- the controller side works: request, manifest, digest, approval, reservation,
+  preflight, launch, barrier, reconcile, report, verification;
+- the runner side works: it starts in the confinement, sets its kernel up, writes
+  the two approved files, leaves the gate untouched, and writes its report;
+- the **verification passes**: both approved checks exit 0 against the candidate
+  revision, the scope audit is clean, and the verdict is `ready`;
+- the **delivery** was fixed last (it asked for the protection of the branch that
+  does not exist yet, and read the server's answer in the wrong shape) and is
+  deployed, but no run has completed it yet.
+
+The runner slot is free, the service runs, and the last worker is diagnosing the
+known flaky test in `tests/sources.spec.ts` instead of building the manifest. The
+next run needs the operator's approval of the digest the system posts, and the
+gate after it.
+
+**Following a run.** The operator reaches the panel through an SSH tunnel over the
+tailnet, not through a proxy: `ssh -N -L 3082:127.0.0.1:3082 ubuntu@100.118.113.57`,
+then `http://127.0.0.1:3082/?token=<token>` (the token is in the newest log under
+`.artifacts`). The local port must be 3082, because the management routes accept
+only that host. The state of the runs is also on the host: `prime-run-watch` prints
+the bridge's segments, the barrier, the quota and the cgroup of the run, and
+`prime-run-watch -f` follows the runner's live transcript. The API answers
+`http://127.0.0.1:3082/orchestrator/api/overview` with the header
+`x-orchestrator-request: 1`.
 
 **Do not write the digest down.** The manifest names its baseline commit, so every
 commit invalidates it. Read the digest the Ticket's question names, in the panel or
@@ -49,26 +71,31 @@ in the comment the system posts on the issue.
 
 **The next step, in order:**
 
-1. Post a request comment on **issue #4** of the fork:
-
-   ```text
-   @szocpaul-dsh-agent Run the approved feature specs/002-smoke-fixture with the Prime runner.
-   ```
-
-2. The worker calls `orchestrator_prime_request`, the controller builds the manifest
-   and posts the digest. The operator approves that exact digest with a second
-   comment, and the comment must be exactly one line:
+1. The operator approves the digest the system posted on **issue #4** with a
+   comment that is exactly one line:
 
    ```text
    @szocpaul-dsh-agent APPROVE RUN <the digest the system posted>
    ```
 
-3. The runner performs the automatable tasks, stops at the `MANUAL GATE` task, and
+2. The runner performs the automatable tasks, stops at the `MANUAL GATE` task, and
    opens a **draft** pull request. Nothing is merged; `main` stays protected.
 
-Post a **fresh** request rather than approving the digest above: the manifest names
-its baseline commit, so a manifest built before a later commit is stale. The digest
-changes with every commit, so always approve the digest the system posts.
+3. The gate asks its own question. The operator answers it in two steps: tick the
+   gate's checkbox in the approved task list with a GitHub-authenticated edit under
+   their own identity, then reply with
+   `@szocpaul-dsh-agent APPROVE GATE <gate> <digest> <full-gate-commit-sha>`.
+
+If the digest is gone or the service is down, start over with a request comment on
+issue #4:
+
+```text
+@szocpaul-dsh-agent Run the approved feature specs/002-smoke-fixture with the Prime runner.
+```
+
+Approve only the digest the system posts: the manifest names its baseline commit,
+so a manifest built before a later commit is stale. The digest changes with every
+commit, so a digest from an earlier run is never the one to approve.
 
 The question names the agent account, so the approval comment must mention
 `@szocpaul-dsh-agent`; the parser accepts no other form.
@@ -139,9 +166,132 @@ GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git p
   has a model budget of 40500. `tests/cards.spec.ts` and `tests/model-surface.spec.ts`
   enforce both, so keep new instructions in `prompts/work.md` and keep the worker
   prompt short.
-- **`tests/sources.spec.ts` has one flaky test.** "takes in the event lines it reads"
-  fails in a full run and passes alone; it is unchanged since the upstream commit.
-  Treat it as known, not as a regression.
+- **A restart from inside the worker session can leave the service down.** The
+  worker started `scripts/dsh-superagent restart` as a background job; the stop
+  ended the worker's own session before the start phase ran, so the tmux session
+  was gone and the Ticket waited with no digest. Check
+  `python3 scripts/dsh-superagent status` first; start the service by hand if it
+  is down.
+- **An issue comment is served under `repos/<owner>/<repo>/issues/comments/<id>`.**
+  The route that carries the issue number answers 404 for every comment, and the
+  approval evidence was read from there, so a manifest the operator had approved
+  waited forever.
+- **The run's socket has to live in the account's own runtime directory.** The
+  system runtime directory (`/run`) belongs to root, and the unprivileged
+  deployment account cannot create a directory under it.
+- **The cgroup of a run is removed with its unit.** The unit is created with
+  `--collect`, so after the run's service ended, its cgroup was gone and the
+  bridge could not prove that the run had ended: the stop stayed unconfirmed, the
+  segment kept the single runner slot, and no further run could start. A cgroup
+  that does not exist holds no process.
+- **The run reaches the model with the network and one credential.** On 2026-11-02 the
+  operator chose this for the smoke: the manifest names the endpoint
+  (`DSH_PRIME_ENDPOINTS`), the confinement keeps the host's resolver, and the run
+  receives the credential the deployment names (`DSH_PRIME_CREDENTIAL_ENV`). The
+  endpoint allowlist is a record the operator approved, not a filter the kernel can
+  enforce, and the residual risk is disclosed in the report.
+- **The runner's prompt never reached the runner.** The launch carried only a one
+  line goal, so the runner knew neither the specification nor the barrier nor the
+  report. The prompt is now part of the invocation.
+- **A worker session can end on its model budget.** The session stopped with
+  `max-tokens` in the middle of a repair and left the Ticket with a stale
+  `running` assignment; the panel's retry is refused when the last assignment
+  reported nothing, so the operator stops the Ticket and posts a fresh request.
+- **The confinement had none of the run's own tools.** The runner's command, the
+  commands of the approved checks and the tool that sets the runner's kernel up
+  were all outside the confinement, and the manifest's isolation named no writable
+  path at all, so the checkout was read-only and the runner could not write the
+  files it was asked to write. The manifest now carries the approved scope as its
+  writable scope, and the plan binds the resolved commands read-only.
+- **The runner's own home is masked, so the run needs its own configuration.**
+  The runner reads its providers from its home; without a configuration of its own
+  it fell back to the definition it ships with, which names another endpoint, and
+  the model call failed. The controller writes the approved provider and model into
+  the run's own home, with the credential named by its environment variable and
+  never by its value.
+- **The installed runner does not announce its session identity.** The supervisor
+  read it from the runner's output, so the barrier that releases the runner was
+  never written and the run waited for a decision that could not arrive. The
+  runner names its session file after the session, so the supervisor looks in the
+  run's own session directory as well.
+- **The runner's kernel takes longer than the identity timeout.** The kernel is set
+  up from scratch on the first run of a segment, which takes longer than the wait
+  the supervisor allowed, so the run was killed while it was still starting.
+- **The runner ran outside the cgroup of its own run.** The run's stop could not
+  reach it, and the placeholder of the service unit made the cgroup look busy
+  after the runner had died. The runner joins the cgroup of its run, and the
+  liveness of a run counts the processes of the run and not the placeholder.
+- **The checkout holds the deployment's own secrets.** The machine state of the
+  repository carries the deployment's credentials, so the confinement masks it.
+- **The verifier inherited the controller's whole environment**, and with it the
+  agent's GitHub credential helper: the verifier held a GitHub credential, which
+  the contract forbids, and two tests failed because of the inherited variable.
+  The verifier's check now runs with a complete, minimal environment of its own.
+- **The verifier ran its checks on the host's small temporary filesystem**, where
+  the project's dependencies do not fit. The scratch copy of a check now lives in
+  the run's own storage. The package manager also refuses a linked dependency
+  tree, so the verifier copies the dependencies instead of linking them.
+- **The delivery asked for the protection of the branch that does not exist yet**,
+  and read the server's answer in the wrong shape, so every run ended with an
+  unknown remote outcome. The merge rights that matter are the ones of the branch
+  the pull request lands on.
+- **A run that ends is noticed by a reconciliation, not by the runner.** The bridge
+  reconciled only at startup, so a finished run waited for the next restart, and
+  the reconciliation never read the report the runner had written.
+- **A ticket whose segment was stopped could not run again**, because the approval
+  effect treated every segment that was not blocked as a run in flight.
+- **The runner cannot compute a digest over the whole workspace**, because that
+  algorithm belongs to the controller. The contract now says that the report names
+  the files the runner changed and the SHA-256 of each of them, and the controller
+  derives the same list from the workspace's own version control and compares
+  every path and every digest.
+- **The run's checkout is the repository itself.** The scope audit reads the
+  working tree of the checkout, so an edit that the bridge's own development makes
+  during a live run is a write outside the approved paths, and the run is blocked
+  for it. The bridge's own fixes therefore belong to a commit made before the run
+  starts, never during one. The worker-agent's own commit lands in the same
+  checkout, so the same rule applies to it.
+- **The controller's identity cannot read the detailed protection rules of a
+  branch.** They need administrative access, which the controller deliberately
+  does not have, so the server answers 404 and every delivery ended with an
+  unknown remote outcome. The merge guard is proven from what the controller's own
+  identity may do: the target branch carries a protection rule, and the
+  controller can neither administer nor maintain the repository.
+- **A gate commit's parent is the revision the controller published.** The segment's
+  own baseline is the revision from before the run, and a gate commit sits on the
+  branch of the run, so its parent is the published result revision. The segment
+  never carried a baseline revision at all, so the gate expected the parent of a
+  gate commit to be the empty string, and no commit could ever satisfy it.
+- **A verified gate decision must be recorded before the continuation.** The bridge
+  verified the human's gate decision and then dropped it: the record was never
+  stored, so the continuation found no decision and the segment waited at the gate
+  forever. The refusal was silent, because the lookup swallowed the reason, so the
+  only way to see it was to patch the built bundle and read what the running
+  service wrote. The decision is recorded now, a repeated poll answers with the
+  record it already made, and `tests/prime-run-request.spec.ts` proves it.
+- **The gated segment must release the runner slot before the continuation takes
+  it.** The segment ended after the continuation had tried to reserve the slot, so
+  the reservation failed and the run waited at the gate again. The segment now ends
+  first, in the same transaction that reserves the slot for the continuation.
+- **A gate counts as complete once the human's commit changed its checkbox.** The
+  task list of a manifest carries no checkbox state, so the continuation was
+  refused with "the human has not marked the gate complete" even though the gate
+  commit had changed exactly that line.
+- **A deliverynek idempotensnek kell lennie.** A controller a commitot az aktuális
+  idővel hozta létre, így minden újrapróbálkozás más revíziót adott, és a delivery
+  elutasította a saját publikálását. A commit dátuma most rögzített, a pull requestet
+  a szerverről keresi (a controller memóriája újraindítás után üres), és a branch azt a
+  headet viseli, amelyet a delivery éppen ellenőrzött.
+- **A folytatás indításakor a checkout ágat vált, de a munkafa piszkos volt.** A runner
+  a saját eredményét hagyja a munkafában, és a git megtagadja az ágváltást. A munkafa
+  félretétele a váltáshoz és a visszavétele utána megoldja.
+- **Az a szegmens, amelynek a runnere el sem indult, újraindulhat** — a launch hibája
+  eddig `unknown` fázisban maradt, amit a reconciler kihagyott, így beragadt. Egy
+  automatikus újrapróbálkozás tartozik hozzá, a második hibához már ember kell.
+- **The Feishu consumer's health had one race.** The consumer's ready report and
+  the error a malformed event reports arrive on two streams in either order, and the
+  ready report could erase the error. The consumer keeps the error now, and
+  `tests/sources.spec.ts` proves it.
 
 ## What the workers may and may not do
 

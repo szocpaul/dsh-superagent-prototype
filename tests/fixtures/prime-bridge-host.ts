@@ -33,7 +33,7 @@ export const manifest = (): ApprovedManifest => ({
 export const runnerReport = (): RunnerReport => ({
   schemaVersion: 1, ticketId: 'ticket-1', assignmentId: 'assignment-1', segmentId: 'segment-1', generation: 1,
   stopEpoch: 0, manifestSha256: 'a'.repeat(64), baselineRevision: 'c'.repeat(40), outcome: 'complete',
-  workspaceSnapshotSha256: 'd'.repeat(64), completedTaskIds: ['T001'], remainingTaskIds: [], nextGateId: null,
+  files: [], completedTaskIds: ['T001'], remainingTaskIds: [], nextGateId: null,
   checks: [{ name: 'typecheck', exitCode: 0, evidence: 'evidence/typecheck.log' }],
   convergence: { rounds: 1, status: 'converged' }, summary: 'the segment is done', risksAndBlockers: [],
 })
@@ -65,13 +65,14 @@ export interface Recorder {
   quotaRelease: number
   verify: number
   deliver: number
+  gateParent: string
   notifications: string[]
   reports: { state: string; summary: string; question?: string }[]
 }
 
 /** A fresh recorder. */
 export const recorder = (): Recorder => ({
-  launch: 0, stop: 0, cleanup: 0, quotaInstall: 0, quotaRelease: 0, verify: 0, deliver: 0, notifications: [], reports: [],
+  launch: 0, stop: 0, cleanup: 0, quotaInstall: 0, quotaRelease: 0, verify: 0, deliver: 0, gateParent: '', notifications: [], reports: [],
 })
 
 /** The fake host of one test. */
@@ -97,6 +98,12 @@ export interface HarnessOptions {
   revalidate?: (host: Harness) => Promise<void>
   /** The run approval the fake approval port reports; without it, the human has not answered yet. */
   runApproval?: () => ApprovalRecord | undefined
+  /** The gate approval the fake approval port finds in the conversation; without it, there is none. */
+  gateApproval?: () => ApprovalRecord | undefined
+  /** The gate decision the fake approval port reports; without it, the human has not decided yet. */
+  gateDecision?: () => ApprovalRecord | undefined
+  /** The manifest the fake host serves. */
+  manifest?: () => ApprovedManifest
   /** The verification port; it may record a stop while it verifies. */
   verify?: (host: Harness) => Promise<{ runner: RunnerReport; verification: VerificationResult }>
   /** The delivery port; it may record a stop while it delivers. */
@@ -120,9 +127,12 @@ export const harness = (options: HarnessOptions = {}): Harness => {
     get effects() { return effects },
     approval: {
       revalidate: async () => { await options.revalidate?.(state.harness) },
-      gateDecision: async () => undefined,
+      gateDecision: async () => options.gateDecision?.(),
       findRunApproval: async () => options.runApproval?.(),
-      findGateApproval: async () => undefined,
+      findGateApproval: async (_ticketId: string, _gateId: string, _digest: string, gate: { parent: string }) => {
+        calls.gateParent = gate.parent
+        return options.gateApproval?.()
+      },
     },
     preflight: { run: async () => ({ ok: true, failures: [] }) },
     runner: {
@@ -155,7 +165,7 @@ export const harness = (options: HarnessOptions = {}): Harness => {
       report: (_ticketId: string, report: { state: string; summary: string; question?: string }) => { calls.reports.push(report) },
       notify: (_ticketId: string, text: string) => { calls.notifications.push(text) },
     },
-    manifest: () => manifest(),
+    manifest: () => options.manifest?.() ?? manifest(),
     now: clock.now,
   }
   const result: Harness = {

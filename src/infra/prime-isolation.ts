@@ -8,9 +8,9 @@
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { lstatSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join, relative, resolve, sep } from 'node:path'
+import { delimiter, dirname, join, relative, resolve, sep } from 'node:path'
 import type { ApprovedManifest } from '../executor/prime-model.ts'
 
 /** Raised when the host cannot provide a required confinement, or when a path escapes its approved root. */
@@ -34,6 +34,10 @@ export interface IsolationPlan {
   workspaceMount: string
   /** The host paths the runner may write; each one lies inside the workspace. */
   writablePaths: string[]
+  /** The host path of the run's own storage: its session, its report and its own configuration. */
+  storage: string
+  /** The host path of the directory the runner writes its session into. */
+  sessionDir: string
   /** The host paths bound read-only: the checkout first, then the toolchain paths the runner needs to execute. */
   readOnlyPaths: string[]
   /** A read-only file inside the checkout, used by the hardlink escape probe. */
@@ -48,7 +52,7 @@ export interface IsolationPlan {
   tmp: string
   /** The command the runner executes inside the confinement. */
   argv: string[]
-  /** The environment inside the confinement; it carries no credential value. */
+  /** The environment inside the confinement; it carries the credential the operator approved for the run. */
   env: Record<string, string>
   /** The file descriptors the runner inherits; nothing beyond the standard streams. */
   inheritedDescriptors: number[]
@@ -72,10 +76,21 @@ export interface IsolationPlanOptions {
   tmp?: string
   /** The toolchain paths bound read-only; they default to `/usr` and `/etc/ssl`. */
   systemPaths?: string[]
+  /** The run's own storage, bound writable; the runner's session and its report live there. */
+  storage?: string
+  /** The directory the runner writes its session into; it defaults to a directory of the run's storage. */
+  sessionDir?: string
+  /** The commands the runner's own tooling needs, bound read-only so the confinement can execute them. */
+  tools?: string[]
+  /** The environment the host adds to the run; it carries the approved credential of the run. */
+  env?: Record<string, string>
 }
 
 /** The default toolchain paths the confinement needs to execute the runner. */
 const DEFAULT_SYSTEM_PATHS = ['/usr', '/etc/ssl']
+
+/** The directories of the checkout that hold the deployment's own state, and never the run's. */
+const MACHINE_STATE = ['.artifacts']
 
 /** Rejects a path that is absolute, empty, or names control state. */
 function checkRelativePath(path: string, label: string): void {
@@ -121,9 +136,21 @@ export function tmuxServerName(segmentId: string): string {
   return `prime-runner-tmux-${identityKey(segmentId)}`
 }
 
+/**
+ * The directory the private Prime daemon sockets live in.
+ *
+ * The bridge creates this directory before a run starts, so the path has to be
+ * writable by the deployment account. The account's own runtime directory is
+ * private to it, while the system runtime directory (`/run`) belongs to root
+ * and cannot be created without privileges.
+ */
+export function socketDirectory(runtimeRoot = process.env.XDG_RUNTIME_DIR || tmpdir()): string {
+  return join(runtimeRoot, 'dsh-prime')
+}
+
 /** The path of the private Prime daemon socket of one run. */
-export function socketPath(segmentId: string): string {
-  return `/run/prime-runner/${identityKey(segmentId)}.sock`
+export function socketPath(segmentId: string, runtimeRoot = process.env.XDG_RUNTIME_DIR || tmpdir()): string {
+  return join(socketDirectory(runtimeRoot), `${identityKey(segmentId)}.sock`)
 }
 
 /** The first regular file of a directory, used as the read-only sample of the hardlink probe. */
@@ -133,6 +160,53 @@ function firstRegularFile(directory: string): string | undefined {
   for (const entry of entries.sort()) {
     const path = join(directory, entry)
     try { if (lstatSync(path).isFile()) return path } catch { /* An unreadable entry is skipped. */ }
+  }
+  return undefined
+}
+
+/**
+ * One host command the confinement has to be able to execute.
+ */
+export interface BoundCommand {
+  /** The command as the manifest names it. */
+  command: string
+  /** The file the command resolves to on the host. */
+  file: string
+  /** The host directories that have to be bound read-only for the command to run. */
+  directories: string[]
+  /** The directory the command is resolved from, which the sandbox's PATH has to name. */
+  searchPath: string
+}
+
+/**
+ * The directories a resolved command needs beside its own file.
+ *
+ * A command installed as a package keeps its own files next to it: the packaged runtime and the bundled models of
+ * the runner, the module tree of a JavaScript command. The package root is bound, not only the file.
+ */
+function commandDirectories(file: string): string[] {
+  const parts = file.split(sep)
+  const index = parts.lastIndexOf('node_modules')
+  if (index >= 0 && index + 1 < parts.length) return [parts.slice(0, index + 2).join(sep)]
+  return [dirname(file)]
+}
+
+/**
+ * Resolves one command on the host and names the paths the confinement has to bind for it.
+ *
+ * The runner and the commands the approved checks name live outside the repository and outside the masked home,
+ * so the confinement binds their directories read-only and the sandbox's PATH names the directory each command is
+ * resolved from.
+ * @returns The resolved command, or undefined when the host has no such command.
+ */
+export function resolveCommand(command: string, path = process.env.PATH ?? ''): BoundCommand | undefined {
+  const candidates = command.includes(sep) ? [command] : path.split(delimiter).filter(Boolean).map(directory => join(directory, command))
+  for (const candidate of candidates) {
+    try {
+      if (!statSync(candidate).isFile()) continue
+      const file = realpathSync(candidate)
+      return { command, file, directories: commandDirectories(file), searchPath: dirname(candidate) }
+    } catch { /* the next candidate is tried */ }
   }
   return undefined
 }
@@ -160,6 +234,18 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
   }
   const segmentId = options.segmentId ?? 'unassigned'
   const sample = firstRegularFile(root)
+  // The run's own storage holds the session, the report and the runner's own configuration. It is the runner's
+  // home inside the confinement, so the controller can read what the run produced after it ended.
+  const storage = resolve(options.storage ?? join(work, '.prime-bridge'))
+  const sessionDir = resolve(options.sessionDir ?? join(storage, 'session'))
+  // The runner and the commands the approved checks name are bound read-only, so the confinement can execute them
+  // even though the operator's home is masked and only the repository is bound.
+  const runner = resolveCommand(manifest.environment.runner.cli)
+  const checks = manifest.checks.map(check => check.argv[0] ?? '').filter(Boolean)
+  const tools = [...checks, ...(options.tools ?? [])].map(command => resolveCommand(command))
+  const bound = [runner, ...tools].filter((item): item is BoundCommand => item !== undefined)
+  const directories = [...new Set(bound.flatMap(item => [...item.directories, item.searchPath]))]
+  const searchPath = [...new Set([...bound.map(item => item.searchPath), '/usr/local/bin', '/usr/bin', '/bin'])].join(':')
   return {
     backend: 'bubblewrap',
     segmentId,
@@ -168,14 +254,16 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
     mountPoint: '/workspace',
     workspaceMount: work === root ? '/workspace' : `/workspace/${relative(root, work)}`,
     writablePaths,
-    readOnlyPaths: [root, ...(options.systemPaths ?? DEFAULT_SYSTEM_PATHS).map(path => resolve(path))],
+    storage,
+    sessionDir,
+    readOnlyPaths: [root, ...directories, ...(options.systemPaths ?? DEFAULT_SYSTEM_PATHS).map(path => resolve(path))],
     readOnlySample: sample ? join(root === work ? '/workspace' : `/workspace/${relative(root, work)}`, relative(root, sample)) : '/workspace',
     network: isolation.network,
     allowedEndpoints: [...isolation.allowedEndpoints],
     home: resolve(options.home ?? homedir()),
     tmp: resolve(options.tmp ?? tmpdir()),
-    argv: options.argv ?? [manifest.environment.runner.cli],
-    env: { HOME: '/tmp', TMPDIR: '/tmp', PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8' },
+    argv: runner ? [runner.file, ...(options.argv ?? [manifest.environment.runner.cli]).slice(1)] : options.argv ?? [manifest.environment.runner.cli],
+    env: { HOME: storage, TMPDIR: '/tmp', PATH: searchPath, LANG: 'C.UTF-8', ...options.env },
     inheritedDescriptors: [0, 1, 2],
     cgroup: cgroupPath(segmentId),
     socket: socketPath(segmentId),
@@ -192,7 +280,7 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
 export function buildBwrapArgs(plan: IsolationPlan): string[] {
   const args = [
     'bwrap',
-    '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-net',
+    '--unshare-pid', '--unshare-ipc', '--unshare-uts',
     '--die-with-parent', '--new-session',
     '--hostname', 'prime-runner',
     '--proc', '/proc',
@@ -201,11 +289,19 @@ export function buildBwrapArgs(plan: IsolationPlan): string[] {
     '--tmpfs', '/tmp',
     '--ro-bind', plan.repositoryRoot, plan.mountPoint,
   ]
+  // A run whose manifest approves no endpoint stays without a network. A run that names its endpoints needs the
+  // host's resolver, because the endpoint allowlist is a record the operator approved, not a filter the kernel
+  // can enforce.
+  if (plan.network === 'none') args.push('--unshare-net')
+  else for (const path of ['/etc/resolv.conf', '/etc/hosts']) if (existsSync(path)) args.push('--ro-bind', path, path)
   for (const path of plan.readOnlyPaths.slice(1)) args.push('--ro-bind', path, path)
   for (const path of plan.writablePaths) {
     const target = `${plan.workspaceMount}/${relative(plan.workspace, path)}`
     args.push('--bind', path, target)
   }
+  args.push('--bind', plan.storage, plan.storage)
+  // The machine state of the checkout holds the deployment's own secrets, so the confinement masks it.
+  for (const directory of MACHINE_STATE) args.push('--tmpfs', `${plan.workspaceMount}/${directory}`)
   args.push('--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64')
   args.push('--chdir', plan.workspaceMount)
   args.push('--clearenv')

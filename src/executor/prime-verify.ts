@@ -8,10 +8,11 @@
  * controller, or model credentials, and only then decides whether the result may be presented as ready.
  */
 import { createHash } from 'node:crypto'
-import { readFileSync, readdirSync, realpathSync } from 'node:fs'
-import { join, relative, resolve, sep } from 'node:path'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { join, resolve, sep } from 'node:path'
 import type { ApprovedCheck, ApprovedManifest, BridgeSegment, ReportedCheck, RunnerReport, VerificationResult } from './prime-model.ts'
 import { bytesDigest, canonicalize, manifestDigest } from './prime-manifest.ts'
+import type { Commands } from '../infra/commands.ts'
 
 /** Raised when the controller cannot verify the workspace, the revision, or the checks. */
 export class VerifyError extends Error {
@@ -32,7 +33,9 @@ export interface SnapshotFile {
 export interface WorkspaceSnapshot {
   /** The workspace the snapshot was collected from. */
   workspace: string
-  /** The files, in path order. */
+  /** Every path the runner changed, in path order. */
+  paths: string[]
+  /** The changed files that still exist, in path order. */
   files: SnapshotFile[]
   /** SHA-256 over the canonical list of the files and their digests. */
   digest: string
@@ -49,7 +52,7 @@ export interface ScopeAudit {
 /** The controller's commit of the approved snapshot. */
 export interface RevisionPort {
   /** Creates the controller's commit of the given files and returns its revision. */
-  commit(input: { files: { path: string; content: Buffer }[]; message: string }): Promise<string>
+  commit(input: { files: { path: string; content: Buffer }[]; message: string; date?: string }): Promise<string>
 }
 
 /** The verifier that reruns one approved check against the exact revision. */
@@ -82,6 +85,12 @@ export interface AssessRequest {
   round: number
   /** The manifest the assessment compares the implementation against. */
   manifestSha256: string
+  /** The segment the assessment belongs to. */
+  segmentId?: string
+  /** The generation of the segment. */
+  generation?: number
+  /** The stop epoch of the segment. */
+  stopEpoch?: number
   /** The tasks the assessment covers. */
   taskIds: string[]
   /** The tasks the assessment does not cover, because a person has to act first. */
@@ -148,39 +157,55 @@ function inScope(relativePath: string, approvedPaths: string[]): boolean {
  * state is left out of the snapshot.
  * @throws VerifyError when a symlink points out of the workspace.
  */
-export async function collectSnapshot(workspace: string, approvedPaths: string[]): Promise<WorkspaceSnapshot> {
+export async function collectSnapshot(commands: Commands, workspace: string, approvedPaths: string[]): Promise<WorkspaceSnapshot> {
   const root = resolve(workspace)
   const prefixes = controlPrefixes(approvedPaths)
+  const paths = await changedPaths(commands, root)
   const files: SnapshotFile[] = []
-  const walk = (directory: string): void => {
-    const entries = readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name < right.name ? -1 : 1)
-    for (const entry of entries) {
-      const full = join(directory, entry.name)
-      const relativePath = relative(root, full).split(sep).join('/')
-      if (entry.isSymbolicLink()) {
-        const target = realpathSync(full)
-        if (target !== root && !target.startsWith(root + sep)) {
-          throw new VerifyError(`the workspace holds a symlink that points out of the workspace: ${relativePath}`)
-        }
-        continue
-      }
-      if (isControlPath(relativePath, prefixes)) continue
-      if (entry.isDirectory()) { walk(full); continue }
-      if (!entry.isFile()) continue
-      const content = readFileSync(full)
-      files.push({ path: relativePath, sha256: bytesDigest(content), content })
+  for (const relativePath of paths) {
+    if (isControlPath(relativePath, prefixes)) continue
+    const full = join(root, relativePath)
+    if (!existsSync(full)) continue
+    const target = realpathSync(full)
+    if (target !== root && !target.startsWith(root + sep)) {
+      throw new VerifyError(`the workspace holds a symlink that points out of the workspace: ${relativePath}`)
     }
+    const content = readFileSync(full)
+    files.push({ path: relativePath, sha256: bytesDigest(content), content })
   }
-  walk(root)
   const listing = files.map(file => ({ path: file.path, sha256: file.sha256 }))
-  return { workspace: root, files, digest: bytesDigest(canonicalize(listing as never)) }
+  return { workspace: root, paths, files, digest: bytesDigest(canonicalize(listing as never)) }
+}
+
+/**
+ * The paths the runner changed, read from the workspace's own version control.
+ *
+ * The controller does not walk the whole tree: the workspace holds the project's dependencies, and the scope of a
+ * run is about what the run changed, not about what was already there.
+ */
+export async function changedPaths(commands: Commands, workspace: string): Promise<string[]> {
+  let output: string
+  try {
+    output = await commands.git(['status', '--porcelain', '-uall', '-z'], workspace)
+  } catch (error) {
+    throw new VerifyError(`the workspace has no version control to read the changed files from: ${String(error)}`)
+  }
+  const entries = output.split('\0').filter(entry => entry.length > 0)
+  const paths: string[] = []
+  for (const entry of entries) {
+    // The porcelain format is "XY path"; a rename carries its old path in the next entry.
+    const path = entry.slice(3).replace(/^"|"$/g, '')
+    if (!path || path === entry) continue
+    paths.push(path.split(sep).join('/'))
+  }
+  return [...new Set(paths)].sort()
 }
 
 /**
  * Audits the collected snapshot against the approved paths. A write outside them blocks readiness.
  */
 export function scopeAudit(snapshot: WorkspaceSnapshot, approvedPaths: string[]): ScopeAudit {
-  const outOfScopePaths = snapshot.files.map(file => file.path).filter(path => !inScope(path, approvedPaths))
+  const outOfScopePaths = snapshot.paths.filter(path => !inScope(path, approvedPaths))
   return { approved: outOfScopePaths.length === 0, outOfScopePaths }
 }
 
@@ -201,11 +226,14 @@ export async function createResultRevision(
   snapshot: WorkspaceSnapshot,
   approvedPaths: string[],
   committer: RevisionPort = contentAttestation,
+  date?: string,
 ): Promise<string> {
   const files = snapshot.files
     .filter(file => inScope(file.path, approvedPaths))
     .map(file => ({ path: file.path, content: file.content }))
-  return committer.commit({ files, message: 'controller: the verified result of a Prime Runner Bridge segment' })
+  // The revision carries a fixed date, so the same result yields the same commit every time: a delivery that runs
+  // again finds the revision it published before instead of a new one the branch head does not carry.
+  return committer.commit({ files, message: 'controller: the verified result of a Prime Runner Bridge segment', ...date ? { date } : {} })
 }
 
 /**
@@ -256,6 +284,9 @@ export async function assess(
     scope: atGate ? 'segment' : 'full',
     round,
     manifestSha256: manifestDigest(manifest),
+    segmentId: segment.segmentId,
+    generation: segment.generation,
+    stopEpoch: segment.stopEpoch,
     taskIds: assessedTaskIds,
     notAssessedTaskIds,
     workspace: segment.runner.workspace,
@@ -274,8 +305,10 @@ export interface VerifyOptions {
   segment: BridgeSegment
   /** The runner's report, which is data and never authority. */
   report: RunnerReport
-  /** The workspace the runner produced. */
+  /** The repository the runner worked in; its changed files are the state the runner produced. */
   workspace: string
+  /** The repository adapter the controller reads the changed files with. */
+  commands: Commands
   /** The verifier that reruns the approved checks. */
   verifier: VerifierPort
   /** The environment the verifier runs in; it may name no credential. */
@@ -315,19 +348,35 @@ export async function verify(options: VerifyOptions): Promise<VerificationResult
   if (report.stopEpoch !== segment.stopEpoch) reasons.push(`the report carries the stop epoch ${report.stopEpoch}, not the current stop epoch ${segment.stopEpoch}`)
   const digest = manifestDigest(manifest)
   if (report.manifestSha256 !== digest) reasons.push(`the report is bound to another manifest than ${digest}`)
-  if (report.outcome !== 'complete') reasons.push(`the run stopped with the outcome ${report.outcome}`)
+  // A segment that stops at a human gate ends with the outcome `gate`; the gate is a boundary the run reached, not
+  // a failure of the run, and the decision about it belongs to a person.
+  const atGate = segment.nextGateId !== null
+  if (report.outcome !== 'complete' && !(atGate && report.outcome === 'gate')) {
+    reasons.push(`the run stopped with the outcome ${report.outcome}`)
+  }
+  if (report.outcome === 'gate' && report.nextGateId !== segment.nextGateId) {
+    reasons.push(`the report names the gate ${report.nextGateId}, not the segment's gate ${segment.nextGateId}`)
+  }
   if (!options.assessment) {
     reasons.push('the controller ran no convergence assessment, so the convergence is not confirmed')
-  } else if (options.assessment.status !== 'converged') {
+  } else if (options.assessment.status !== 'converged' && !(atGate && options.assessment.status === 'deferred-at-gate')) {
     reasons.push(`the controller's convergence assessment ended with ${options.assessment.status}`)
   }
-  const snapshot = await collectSnapshot(workspace, manifest.allowedPaths)
-  if (snapshot.digest !== report.workspaceSnapshotSha256) {
-    reasons.push('the workspace changed after the runner wrote its report, so the report is stale')
+  const snapshot = await collectSnapshot(options.commands, workspace, manifest.allowedPaths)
+  // The report names the files the runner changed and the digest of each of them; the controller compares every
+  // path and every digest with the workspace it sees, so a report of another workspace never passes.
+  const reported = new Map(report.files.map(file => [file.path, file.sha256]))
+  const actual = new Map(snapshot.files.map(file => [file.path, file.sha256]))
+  if (reported.size !== actual.size) {
+    reasons.push(`the report names ${reported.size} file(s) and the workspace holds ${actual.size} changed file(s), so the report is stale`)
+  }
+  for (const [path, sha256] of actual) {
+    if (!reported.has(path)) reasons.push(`the report does not name the changed file ${path}`)
+    else if (reported.get(path) !== sha256) reasons.push(`the report does not describe the current content of ${path}`)
   }
   const audit = scopeAudit(snapshot, manifest.allowedPaths)
   if (!audit.approved) reasons.push(`the run wrote outside the approved paths: ${audit.outOfScopePaths.join(', ')}`)
-  const revision = await createResultRevision(snapshot, manifest.allowedPaths, options.committer)
+  const revision = await createResultRevision(snapshot, manifest.allowedPaths, options.committer, segment.createdAt)
   const checks = await rerunChecks(manifest.checks, revision, verifier, options.environment ?? {})
   for (const check of checks) {
     if (check.exitCode !== 0) reasons.push(`the check ${check.name} failed against the result revision with exit code ${check.exitCode}`)

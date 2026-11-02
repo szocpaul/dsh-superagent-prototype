@@ -15,6 +15,7 @@ import { decideRecovery, stopFence } from './prime-recovery.ts'
 import type { TaskLine } from './prime-tasks.ts'
 import { Later, type Effects } from '../app/effects.ts'
 import type { Store } from '../app/store.ts'
+import { socketPath } from '../infra/prime-isolation.ts'
 
 /** What the coordinator needs from the approval protocol. */
 export interface ApprovalPort {
@@ -177,7 +178,8 @@ export class PrimeBridge {
       tickets.report(ticketId, { state: 'blocked', summary: 'The approved manifest of the run is missing' })
       return true
     }
-    if (store.bridge.segments.byTicket(ticketId).some(segment => segment.phase !== 'blocked')) return true
+    // A segment that reached a terminal phase released the runner slot, so it does not keep the ticket from a new run.
+    if (store.bridge.segments.byTicket(ticketId).some(segment => !['stopped', 'ready', 'blocked', 'failed'].includes(segment.phase))) return true
     const record = await approval.findRunApproval(ticketId, manifestDigest(manifest))
     // The operator has not answered yet: the effect waits for the decision.
     if (!record) return false
@@ -219,9 +221,12 @@ export class PrimeBridge {
       tickets.report(segment.ticketId, { state: 'blocked', summary: `The gate ${segment.nextGateId} is not an approved task` })
       return true
     }
+    // The gate commit sits on the branch of the run, so its parent is the revision the controller published for that
+    // run; the segment's own baseline is the revision from before the run and is never the parent of a gate commit.
+    const published = this.host.store.bridge.reports.get(segmentId)?.verification?.resultRevision
     const record = await this.host.approval.findGateApproval(segment.ticketId, segment.nextGateId, manifestDigest(manifest), {
       taskLine: `${gate.id} ${gate.text}`,
-      parent: segment.baseRevision ?? '',
+      parent: published ?? segment.baseRevision ?? '',
     })
     // The operator has not decided the gate yet: the effect waits for the decision.
     if (!record) return false
@@ -242,7 +247,15 @@ export class PrimeBridge {
    */
   reconcileOpenSegments(): void {
     for (const segment of this.host.store.bridge.segments.list()) {
-      if (['stopped', 'ready', 'blocked', 'failed'].includes(segment.phase)) continue
+      // A segment that already left the runner's phase is driven by its own effect, and an unknown delivery waits for
+      // an operator; reconciling it again would repeat the verification and the delivery without a new reason.
+      if (['stopped', 'ready', 'blocked', 'failed', 'verifying', 'gate_wait'].includes(segment.phase)) {
+        // A segment whose delivery failed may publish again once: the branch head it saw may have been its own push.
+        if (segment.phase === 'blocked' && this.deliveryFailures(segment) < 3) {
+          this.host.effects.enqueueSegment('prime-deliver', segment.segmentId, segment.generation)
+        }
+        continue
+      }
       this.host.effects.enqueueSegment('prime-reconcile', segment.segmentId, segment.generation)
     }
   }
@@ -271,7 +284,7 @@ export class PrimeBridge {
         serviceUnit: `dsh-prime-${segmentId.slice(0, 8)}`,
         cgroup: `/sys/fs/cgroup/dsh-prime-${segmentId.slice(0, 8)}`,
         tmux: `dsh-prime-${segmentId.slice(0, 8)}`,
-        socket: `/run/dsh-prime/${segmentId}.sock`,
+        socket: socketPath(segmentId),
         workspace: request.workspace,
         branch: request.branch,
       },
@@ -400,6 +413,15 @@ export class PrimeBridge {
       remote: 'known',
       ticketEnded: !!ticket?.ended,
     })
+    // A run whose runner never started may start again once the cause is gone: the segment holds no session, wrote no
+    // report, and its runner is confirmed stopped. One automatic retry belongs to the segment; a second failure waits
+    // for an operator, so a cause that is not gone cannot spin the segment.
+    if (segment.phase === 'unknown' && segment.runner.sessionId === undefined && !state.report && state.stop === 'stopped'
+      && this.launchFailures(segment) === 1) {
+      this.phase(segment, 'launching')
+      this.host.effects.enqueueSegment('prime-launch', segment.segmentId, segment.generation)
+      return
+    }
     if (decision.action === 'continue') { this.phase(segment, 'running'); return }
     if (decision.action !== 'deliver') {
       // A run that stopped without a report is blocked; any other state that cannot be established stays unknown.
@@ -523,21 +545,42 @@ export class PrimeBridge {
     if (!decision) return undefined
     const quiescence = await runner.reconcile(segment)
     if (quiescence.stop !== 'stopped') return undefined
-    const tasks = taskLines(manifest)
+    // The human's gate commit changed exactly the gate's checkbox, and the decision record was made from that
+    // commit, so the gate counts as complete for the continuation.
+    const tasks = taskLines(manifest).map(task => task.id === decision.gateId ? { ...task, checked: true } : task)
     const next = nextSegment(tasks, decision.gateId!, decision)
     if (!next.ok) return undefined
-    const reserved = this.reserve({
-      ticketId: segment.ticketId,
-      assignmentId: segment.assignmentId,
-      manifest,
-      taskIds: next.segment.map(task => task.id),
-      nextGateId: next.gate?.id ?? null,
-      branch: segment.runner.branch,
-      workspace: segment.runner.workspace,
-      baseRevision: segment.baseRevision,
+    // The gate is approved and the segment is quiescent, so this segment ends here. It releases the runner slot in
+    // the same transaction that reserves the slot for the continuation; a segment that keeps the slot would leave the
+    // continuation waiting for a slot it can never take.
+    return store.atomic(() => {
+      this.phase(segment, 'stopped')
+      return this.reserve({
+        ticketId: segment.ticketId,
+        assignmentId: segment.assignmentId,
+        manifest,
+        taskIds: next.segment.map(task => task.id),
+        nextGateId: next.gate?.id ?? null,
+        branch: segment.runner.branch,
+        workspace: segment.runner.workspace,
+        // The continuation builds on the commit the human made for the gate: that commit sits on the branch of the
+        // run and carries the gate's checkbox, so it is the revision the continuation has to build on. The segment's
+        // own baseline is the revision from before the run, which the gate commit does not descend from.
+        baseRevision: decision.gateCommit ?? segment.baseRevision,
+      })
     })
-    if (reserved) this.phase(segment, 'stopped')
-    return reserved
+  }
+
+  /** How many times the delivery of a segment failed, so a retry can be bounded. */
+  private deliveryFailures(segment: BridgeSegment): number {
+    return this.host.store.bridge.failures.byTicket(segment.ticketId)
+      .filter(record => (record.id ?? '').startsWith(segment.segmentId) && record.cause === 'delivery').length
+  }
+
+  /** How many times the launch of a segment failed, so a retry can be bounded. */
+  private launchFailures(segment: BridgeSegment): number {
+    return this.host.store.bridge.failures.byTicket(segment.ticketId)
+      .filter(record => (record.id ?? '').startsWith(segment.segmentId) && record.cause === 'provider').length
   }
 
   /** Records a failure of a segment with its cause and the action an operator must take. */

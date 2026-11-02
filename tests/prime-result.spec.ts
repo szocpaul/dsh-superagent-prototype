@@ -1,6 +1,6 @@
 
 import { describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -40,6 +40,17 @@ import {
 } from '../src/executor/prime-verify.ts'
 import { digest, manifestDigest, validateManifest } from '../src/executor/prime-manifest.ts'
 import type { ApprovedManifest, BridgeSegment, RunnerReport } from '../src/executor/prime-model.ts'
+
+/** The files of a workspace, as the repository reports them. */
+function filesOf(root: string, prefix = ''): string[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap(entry => {
+    const path = prefix ? `${prefix}/${entry.name}` : entry.name
+    return entry.isDirectory() ? filesOf(join(root, entry.name), path) : [path]
+  })
+}
+
+/** The repository adapter the tests use: every file of the workspace counts as changed. */
+const repository = (root: string) => ({ git: async () => filesOf(root).map(path => `?? ${path}`).join('\0') } as never)
 
 const environment = {
   deploymentId: 'deployment-1',
@@ -98,7 +109,7 @@ const report = (overrides: Partial<RunnerReport> = {}): RunnerReport => ({
   manifestSha256: manifestDigest(manifest()),
   baselineRevision: 'a'.repeat(40),
   outcome: 'complete',
-  workspaceSnapshotSha256: '0'.repeat(64),
+  files: [],
   completedTaskIds: ['T001', 'T002'],
   remainingTaskIds: [],
   nextGateId: null,
@@ -231,12 +242,13 @@ describe('a report is never authority', () => {
 
   it('blocks readiness when a check the manifest approves never ran', async () => {
     const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n' })
-    const snapshot = await collectSnapshot(root, ['src/executor'])
+    const snapshot = await collectSnapshot(repository(root), root, ['src/executor'])
     const result = await verify({
       manifest: manifest(),
       segment: segment(),
-      report: report({ workspaceSnapshotSha256: snapshot.digest }),
+      report: report({ files: snapshot.files.map(file => ({ path: file.path, sha256: file.sha256 })) }),
       workspace: root,
+      commands: repository(root),
       verifier: verifier({}),
       assessment: converged(),
     })
@@ -246,12 +258,13 @@ describe('a report is never authority', () => {
 
   it('blocks readiness when the controller ran no convergence assessment', async () => {
     const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n' })
-    const snapshot = await collectSnapshot(root, ['src/executor'])
+    const snapshot = await collectSnapshot(repository(root), root, ['src/executor'])
     const result = await verify({
       manifest: manifest(),
       segment: segment(),
-      report: report({ workspaceSnapshotSha256: snapshot.digest }),
+      report: report({ files: snapshot.files.map(file => ({ path: file.path, sha256: file.sha256 })) }),
       workspace: root,
+      commands: repository(root),
       verifier: { run: async () => ({ exitCode: 0, evidence: 'verifier/typecheck.log' }) },
     })
     expect(result.decision).toBe('blocked')
@@ -260,12 +273,13 @@ describe('a report is never authority', () => {
 
   it('blocks readiness when a rerun check fails, even though the report claimed success', async () => {
     const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n' })
-    const snapshot = await collectSnapshot(root, ['src/executor'])
+    const snapshot = await collectSnapshot(repository(root), root, ['src/executor'])
     const result = await verify({
       manifest: manifest(),
       segment: segment(),
-      report: report({ workspaceSnapshotSha256: snapshot.digest }),
+      report: report({ files: snapshot.files.map(file => ({ path: file.path, sha256: file.sha256 })) }),
       workspace: root,
+      commands: repository(root),
       verifier: verifier({ typecheck: 1 }),
       assessment: converged(),
     })
@@ -333,9 +347,9 @@ describe('failure causes', () => {
 describe('the workspace snapshot', () => {
   it('changes its digest when a file changes', async () => {
     const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n' })
-    const before = await collectSnapshot(root, ['src/executor'])
+    const before = await collectSnapshot(repository(root), root, ['src/executor'])
     writeFileSync(join(root, 'src/executor/a.ts'), 'export const a = 2\n')
-    const after = await collectSnapshot(root, ['src/executor'])
+    const after = await collectSnapshot(repository(root), root, ['src/executor'])
     expect(after.digest).not.toBe(before.digest)
   })
 
@@ -343,25 +357,58 @@ describe('the workspace snapshot', () => {
     const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n' })
     const outside = workspace({ 'secret.txt': 'secret\n' })
     symlinkSync(join(outside, 'secret.txt'), join(root, 'src/executor/link.txt'))
-    await expect(collectSnapshot(root, ['src/executor'])).rejects.toThrow(/symlink/i)
+    await expect(collectSnapshot(repository(root), root, ['src/executor'])).rejects.toThrow(/symlink/i)
   })
 
   it('reports an out-of-scope write', async () => {
     const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n', 'docs/b.md': 'text\n' })
-    const snapshot = await collectSnapshot(root, ['src/executor'])
+    const snapshot = await collectSnapshot(repository(root), root, ['src/executor'])
     const audit = scopeAudit(snapshot, ['src/executor'])
     expect(audit.approved).toBe(false)
     expect(audit.outOfScopePaths).toContain('docs/b.md')
   })
 
-  it('blocks readiness when a write left the approved paths', async () => {
-    const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n', 'docs/b.md': 'text\n' })
-    const snapshot = await collectSnapshot(root, ['src/executor'])
+  it('blocks readiness when the report does not name the changed file', async () => {
+    const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n' })
     const result = await verify({
       manifest: manifest(),
       segment: segment(),
-      report: report({ workspaceSnapshotSha256: snapshot.digest }),
+      report: report({ files: [] }),
       workspace: root,
+      commands: repository(root),
+      verifier: { run: async () => ({ exitCode: 0, evidence: 'verifier/typecheck.log' }) },
+      assessment: converged(),
+    })
+    expect(result.decision).toBe('blocked')
+    expect(result.reasons.join(' ')).toMatch(/does not name the changed file/)
+  })
+
+  it('blocks readiness when the workspace changed after the runner wrote its report', async () => {
+    const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n' })
+    const snapshot = await collectSnapshot(repository(root), root, ['src/executor'])
+    writeFileSync(join(root, 'src/executor/a.ts'), 'export const a = 2\n')
+    const result = await verify({
+      manifest: manifest(),
+      segment: segment(),
+      report: report({ files: snapshot.files.map(file => ({ path: file.path, sha256: file.sha256 })) }),
+      workspace: root,
+      commands: repository(root),
+      verifier: { run: async () => ({ exitCode: 0, evidence: 'verifier/typecheck.log' }) },
+      assessment: converged(),
+    })
+    expect(result.decision).toBe('blocked')
+    expect(result.reasons.join(' ')).toMatch(/does not describe the current content/)
+  })
+
+  it('blocks readiness when a write left the approved paths', async () => {
+    const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n', 'docs/b.md': 'text\n' })
+    const snapshot = await collectSnapshot(repository(root), root, ['src/executor'])
+    const result = await verify({
+      manifest: manifest(),
+      segment: segment(),
+      report: report({ files: snapshot.files.map(file => ({ path: file.path, sha256: file.sha256 })) }),
+      workspace: root,
+      commands: repository(root),
       verifier: { run: async () => ({ exitCode: 0, evidence: 'verifier/typecheck.log' }) },
       assessment: converged(),
     })
@@ -373,7 +420,7 @@ describe('the workspace snapshot', () => {
 describe('the controller result revision', () => {
   it('is the controller\'s own commit, not the runner\'s report', async () => {
     const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n' })
-    const snapshot = await collectSnapshot(root, ['src/executor'])
+    const snapshot = await collectSnapshot(repository(root), root, ['src/executor'])
     const commits: { files: { path: string }[] }[] = []
     const port: RevisionPort = {
       commit: async input => {
@@ -384,12 +431,12 @@ describe('the controller result revision', () => {
     const revision = await createResultRevision(snapshot, ['src/executor'], port)
     expect(revision).toBe('9'.repeat(40))
     expect(commits[0]?.files.map(file => file.path)).toEqual(['src/executor/a.ts'])
-    expect(revision).not.toBe(report().workspaceSnapshotSha256)
+    expect(revision).not.toBe(snapshot.files[0]?.sha256)
   })
 
   it('reruns the checks against the exact revision and ignores the runner\'s own check output', async () => {
     const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n' })
-    const snapshot = await collectSnapshot(root, ['src/executor'])
+    const snapshot = await collectSnapshot(repository(root), root, ['src/executor'])
     const seen: string[] = []
     const port: RevisionPort = { commit: async () => '9'.repeat(40) }
     const revision = await createResultRevision(snapshot, ['src/executor'], port)
@@ -464,12 +511,13 @@ describe('the convergence assessment', () => {
 describe('the verdict', () => {
   it('separates the enforced controls from the instructed constraints', async () => {
     const root = workspace({ 'src/executor/a.ts': 'export const a = 1\n' })
-    const snapshot = await collectSnapshot(root, ['src/executor'])
+    const snapshot = await collectSnapshot(repository(root), root, ['src/executor'])
     const result = await verify({
       manifest: manifest(),
       segment: segment(),
-      report: report({ workspaceSnapshotSha256: snapshot.digest }),
+      report: report({ files: snapshot.files.map(file => ({ path: file.path, sha256: file.sha256 })) }),
       workspace: root,
+      commands: repository(root),
       verifier: { run: async () => ({ exitCode: 0, evidence: 'verifier/typecheck.log' }) },
       assessment: converged(),
     })

@@ -59,7 +59,8 @@ describe('the bootstrap barrier', () => {
         supported: () => true,
         async start() {},
         async cancel() {},
-        processes: () => [],
+        adopt: async () => {},
+        processes: async () => [],
         async remove() { return [] },
       })
       const identity = {

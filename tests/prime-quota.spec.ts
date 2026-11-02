@@ -10,6 +10,7 @@ import {
 } from '../src/executor/prime-quota.ts'
 
 const scriptPath = fileURLToPath(new URL('../scripts/prime-quota-guard.sh', import.meta.url))
+const accountingPath = fileURLToPath(new URL('../scripts/prime-accounting.sh', import.meta.url))
 
 /** A host that records what it was asked to do, so no real cron, cgroup or filesystem entry is touched. */
 class FakeHost implements GuardHost {
@@ -77,6 +78,32 @@ const runScript = (dir: string, command: string[], warn = 100, stop = 200) => {
   const alerts = statSync(alertPath, { throwIfNoEntry: false }) ? readAlert(alertPath) : []
   return { ...result, alerts }
 }
+
+describe('the accounting of a run', () => {
+  it('counts the tokens of every session file of the run', () => {
+    const dir = workspace()
+    const sessions = join(dir, 'session')
+    mkdirSync(sessions, { recursive: true })
+    const record = (input: number) => JSON.stringify({
+      message: { role: 'assistant', usage: { input, output: 1, cacheRead: 0, cacheWrite: 0 } },
+      timestamp: new Date().toISOString(),
+    })
+    writeFileSync(join(sessions, 'a.jsonl'), `${record(10)}\n`)
+    writeFileSync(join(sessions, 'b.jsonl'), `${record(20)}\n`)
+    const result = spawnSync('sh', [accountingPath, sessions], { encoding: 'utf8' })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('tokens=32')
+    expect(result.stdout).toContain('scope=session')
+  })
+
+  it('fails closed when the session directory holds no session file', () => {
+    const dir = workspace()
+    const sessions = join(dir, 'session')
+    mkdirSync(sessions, { recursive: true })
+    const result = spawnSync('sh', [accountingPath, sessions], { encoding: 'utf8' })
+    expect(result.status).not.toBe(0)
+  })
+})
 
 describe('guard identity', () => {
   it('invokes the guard script with the run\'s explicit identity and no hardcoded session name', () => {
