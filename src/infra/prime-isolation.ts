@@ -8,7 +8,7 @@
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join, relative, resolve, sep } from 'node:path'
 import type { ApprovedManifest } from '../executor/prime-model.ts'
@@ -34,6 +34,8 @@ export interface IsolationPlan {
   workspaceMount: string
   /** The host paths the runner may write; each one lies inside the workspace. */
   writablePaths: string[]
+  /** The host path of the run's own storage: its session, its report and its own configuration. */
+  storage: string
   /** The host paths bound read-only: the checkout first, then the toolchain paths the runner needs to execute. */
   readOnlyPaths: string[]
   /** A read-only file inside the checkout, used by the hardlink escape probe. */
@@ -48,7 +50,7 @@ export interface IsolationPlan {
   tmp: string
   /** The command the runner executes inside the confinement. */
   argv: string[]
-  /** The environment inside the confinement; it carries no credential value. */
+  /** The environment inside the confinement; it carries the credential the operator approved for the run. */
   env: Record<string, string>
   /** The file descriptors the runner inherits; nothing beyond the standard streams. */
   inheritedDescriptors: number[]
@@ -72,6 +74,10 @@ export interface IsolationPlanOptions {
   tmp?: string
   /** The toolchain paths bound read-only; they default to `/usr` and `/etc/ssl`. */
   systemPaths?: string[]
+  /** The run's own storage, bound writable; the runner's session and its report live there. */
+  storage?: string
+  /** The environment the host adds to the run; it carries the approved credential of the run. */
+  env?: Record<string, string>
 }
 
 /** The default toolchain paths the confinement needs to execute the runner. */
@@ -219,6 +225,9 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
   }
   const segmentId = options.segmentId ?? 'unassigned'
   const sample = firstRegularFile(root)
+  // The run's own storage holds the session, the report and the runner's own configuration. It is the runner's
+  // home inside the confinement, so the controller can read what the run produced after it ended.
+  const storage = resolve(options.storage ?? join(work, '.prime-bridge'))
   // The runner and the commands the approved checks name are bound read-only, so the confinement can execute them
   // even though the operator's home is masked and only the repository is bound.
   const runner = resolveCommand(manifest.environment.runner.cli)
@@ -234,6 +243,7 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
     mountPoint: '/workspace',
     workspaceMount: work === root ? '/workspace' : `/workspace/${relative(root, work)}`,
     writablePaths,
+    storage,
     readOnlyPaths: [root, ...directories, ...(options.systemPaths ?? DEFAULT_SYSTEM_PATHS).map(path => resolve(path))],
     readOnlySample: sample ? join(root === work ? '/workspace' : `/workspace/${relative(root, work)}`, relative(root, sample)) : '/workspace',
     network: isolation.network,
@@ -241,7 +251,7 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
     home: resolve(options.home ?? homedir()),
     tmp: resolve(options.tmp ?? tmpdir()),
     argv: runner ? [runner.file, ...(options.argv ?? [manifest.environment.runner.cli]).slice(1)] : options.argv ?? [manifest.environment.runner.cli],
-    env: { HOME: '/tmp', TMPDIR: '/tmp', PATH: searchPath, LANG: 'C.UTF-8' },
+    env: { HOME: storage, TMPDIR: '/tmp', PATH: searchPath, LANG: 'C.UTF-8', ...options.env },
     inheritedDescriptors: [0, 1, 2],
     cgroup: cgroupPath(segmentId),
     socket: socketPath(segmentId),
@@ -258,7 +268,7 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
 export function buildBwrapArgs(plan: IsolationPlan): string[] {
   const args = [
     'bwrap',
-    '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-net',
+    '--unshare-pid', '--unshare-ipc', '--unshare-uts',
     '--die-with-parent', '--new-session',
     '--hostname', 'prime-runner',
     '--proc', '/proc',
@@ -267,11 +277,17 @@ export function buildBwrapArgs(plan: IsolationPlan): string[] {
     '--tmpfs', '/tmp',
     '--ro-bind', plan.repositoryRoot, plan.mountPoint,
   ]
+  // A run whose manifest approves no endpoint stays without a network. A run that names its endpoints needs the
+  // host's resolver, because the endpoint allowlist is a record the operator approved, not a filter the kernel
+  // can enforce.
+  if (plan.network === 'none') args.push('--unshare-net')
+  else for (const path of ['/etc/resolv.conf', '/etc/hosts']) if (existsSync(path)) args.push('--ro-bind', path, path)
   for (const path of plan.readOnlyPaths.slice(1)) args.push('--ro-bind', path, path)
   for (const path of plan.writablePaths) {
     const target = `${plan.workspaceMount}/${relative(plan.workspace, path)}`
     args.push('--bind', path, target)
   }
+  args.push('--bind', plan.storage, plan.storage)
   args.push('--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64')
   args.push('--chdir', plan.workspaceMount)
   args.push('--clearenv')

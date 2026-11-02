@@ -236,7 +236,12 @@ export class Runtime extends Service implements SourceHost {
         deploymentId: this.machine.stateDir,
         runner: { cli: 'prime-agent', version: process.env.DSH_PRIME_VERSION ?? '0.10.1' },
         model: { provider: process.env.DSH_PRIME_PROVIDER ?? 'unknown', id: process.env.DSH_PRIME_MODEL ?? 'unknown' },
-        isolation: { backend: 'bubblewrap', writablePaths: [], network: 'none', allowedEndpoints: [] },
+        isolation: {
+          backend: 'bubblewrap',
+          writablePaths: [],
+          network: process.env.DSH_PRIME_NETWORK === 'allowlist' ? 'allowlist' : 'none',
+          allowedEndpoints: (process.env.DSH_PRIME_ENDPOINTS ?? '').split(',').map(item => item.trim()).filter(Boolean),
+        },
         credentials: process.env.DSH_PRIME_CREDENTIALS?.split(',').map(item => item.trim()).filter(Boolean) ?? [],
         quota: { warnTokens: Number(process.env.DSH_PRIME_WARN_TOKENS ?? 0), stopTokens: Number(process.env.DSH_PRIME_STOP_TOKENS ?? 0),
           maxWallMs: Number(process.env.DSH_PRIME_MAX_WALL_MS ?? 0), meteringScope: 'session' },
@@ -250,7 +255,7 @@ export class Runtime extends Service implements SourceHost {
     this.primeDeps = deps
     return createPrimeBridge(deps, {
       preflightHost: () => hostPreflightHost(deps),
-      runner: () => runnerAdapter(new PrimeSupervisor(localIsolationRunner, hostRunEnvironment(deps.commands()))),
+      runner: () => runnerAdapter(new PrimeSupervisor(localIsolationRunner, hostRunEnvironment(deps.commands())), deps),
       verify: () => runtime.verifyAdapter(),
       delivery: () => deliveryAdapter(deps, ledger),
       quota: () => quotaAdapter(deps),

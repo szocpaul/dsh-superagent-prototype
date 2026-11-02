@@ -36,14 +36,19 @@ the disposable feature `specs/002-smoke-fixture`. The plan is in
 `specs/001-prime-runner-bridge/t054-plan.md`; the operator's steps are in
 `specs/001-prime-runner-bridge/operator-steps.md`.
 
-**The state at the end of 2026-11-02**: three bridge defects were found and fixed
-during the smoke (the approval comment's route, the socket directory, and the cgroup
-of a run that is gone). The Ticket `8b43e5eb` was stopped, because its failed
-segment held the single runner slot, and a fresh request created the Ticket
-`1b5ff5d1`, whose manifest waits for the operator's approval on issue #4. The
-manifest names the writable paths `src/smoke.ts` and `tests/smoke.spec.ts`, the
-checks `pnpm run typecheck` and `pnpm run test`, the tasks `T001` to `T005` with
-`T003` as the human gate, and the environment digest `8947a897`.
+**The state at the end of 2026-11-02**: the smoke found that the bridge's runner
+launch path had never been completed. The controller side works up to the launch;
+the runner side did not, and four defects were fixed (the approval comment's route,
+the socket directory, the cgroup of a run that is gone, and the runner's command
+inside the confinement). The operator then chose the network and credential model
+for the run, which is implemented. Both runner segments were stopped, so the runner
+slot is free, and no request is waiting on issue #4.
+
+Two gaps are still open before a run can reach the manual gate: the runner contract
+does not say how the runner computes the workspace snapshot digest that its report
+carries, and the quota guard reads a session file whose path the run does not name.
+The delivery after the gate (the candidate commit and the branch of the pull
+request) is untested as well.
 
 **Do not write the digest down.** The manifest names its baseline commit, so every
 commit invalidates it. Read the digest the Ticket's question names, in the panel or
@@ -164,6 +169,15 @@ GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git p
   bridge could not prove that the run had ended: the stop stayed unconfirmed, the
   segment kept the single runner slot, and no further run could start. A cgroup
   that does not exist holds no process.
+- **The run reaches the model with the network and one credential.** On 2026-11-02 the
+  operator chose this for the smoke: the manifest names the endpoint
+  (`DSH_PRIME_ENDPOINTS`), the confinement keeps the host's resolver, and the run
+  receives the credential the deployment names (`DSH_PRIME_CREDENTIAL_ENV`). The
+  endpoint allowlist is a record the operator approved, not a filter the kernel can
+  enforce, and the residual risk is disclosed in the report.
+- **The runner's prompt never reached the runner.** The launch carried only a one
+  line goal, so the runner knew neither the specification nor the barrier nor the
+  report. The prompt is now part of the invocation.
 - **A worker session can end on its model budget.** The session stopped with
   `max-tokens` in the middle of a repair and left the Ticket with a stale
   `running` assignment; the panel's retry is refused when the last assignment

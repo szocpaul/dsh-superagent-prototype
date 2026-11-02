@@ -153,12 +153,34 @@ describe('isolation plan', () => {
     expect(readOnly).toContain(tools)
   })
 
+  it('keeps a run without an approved endpoint without a network', () => {
+    const plan = isolationPlan(manifest(), workspace())
+    expect(plan.network).toBe('none')
+    expect(buildBwrapArgs(plan)).toContain('--unshare-net')
+  })
+
+  it('gives a run that names its endpoints the host resolver, because the allowlist is a record and not a filter', () => {
+    const plan = isolationPlan(manifest({ network: 'allowlist', allowedEndpoints: ['https://api.minimax.io/v1'] }), workspace())
+    expect(buildBwrapArgs(plan)).not.toContain('--unshare-net')
+  })
+
+  it('binds the storage of the run writable and gives the runner its home there', () => {
+    const root = workspace()
+    const storage = join(root, 'storage')
+    const plan = isolationPlan(manifest(), root, { storage })
+    const args = buildBwrapArgs(plan)
+    const writable = args.reduce<string[]>((found, value, index) => (args[index - 1] === '--bind' ? [...found, value] : found), [])
+    expect(writable).toContain(storage)
+    expect(plan.env.HOME).toBe(storage)
+  })
+
   it('binds only the approved writable paths writable', () => {
     const root = workspace()
     const plan = isolationPlan(manifest({ writablePaths: ['src/fixture.ts'] }), root)
     const args = buildBwrapArgs(plan)
     const writable = args.reduce<string[]>((found, value, index) => (args[index - 1] === '--bind' ? [...found, value] : found), [])
-    expect(writable).toEqual([join(root, 'src', 'fixture.ts')])
+    // The approved files and the run's own storage are writable; nothing else is.
+    expect(writable).toEqual([join(root, 'src', 'fixture.ts'), join(root, '.prime-bridge')])
     const readOnly = args.reduce<string[]>((found, value, index) => (args[index - 1] === '--ro-bind' ? [...found, value] : found), [])
     expect(readOnly).toContain(root)
     expect(readOnly).not.toContain(join(root, 'src', 'fixture.ts'))

@@ -224,6 +224,7 @@ export function hostRunEnvironment(commands: Commands): RunEnvironment {
       identity.cgroup = `/sys/fs/cgroup${cgroup}`
       mkdirSync(dirname(identity.socket), { recursive: true })
       mkdirSync(plan.workspace, { recursive: true })
+      mkdirSync(plan.storage, { recursive: true })
     },
     async cancel(identity: SegmentRunnerIdentity): Promise<void> {
       // A cgroup that is gone cannot hold a process, so there is nothing left to cancel.
@@ -251,8 +252,20 @@ export function hostRunEnvironment(commands: Commands): RunEnvironment {
   }
 }
 
+/**
+ * The credential the operator approved for the run, in the environment the runner sees.
+ *
+ * The manifest names the credential by category, never by value; the deployment names the environment variable
+ * that holds it, and only the run the operator approved receives it.
+ */
+export function runCredential(): Record<string, string> {
+  const name = process.env.DSH_PRIME_CREDENTIAL_ENV ?? ''
+  const value = name ? process.env[name] : undefined
+  return name && value ? { [name]: value } : {}
+}
+
 /** The runner adapter: it launches, stops, and reconciles the run through the supervisor. */
-export function runnerAdapter(supervisor: PrimeSupervisor): RunnerPort {
+export function runnerAdapter(supervisor: PrimeSupervisor, deps: PrimeServiceDeps): RunnerPort {
   return {
     async launch(segment: BridgeSegment, manifest: ApprovedManifest): Promise<{ sessionId?: string; sessionFile?: string }> {
       const barrierPath = join(segment.runner.workspace, '.prime-bridge-barrier')
@@ -260,10 +273,13 @@ export function runnerAdapter(supervisor: PrimeSupervisor): RunnerPort {
         taskIds: segment.taskIds,
         nextGateId: segment.nextGateId ?? undefined,
         barrier: { path: barrierPath, release: `${segment.segmentId}:${segment.generation}` },
+        reportPath: join(segment.runner.workspace, 'runner-report.md'),
       })
-      const plan = isolationPlan(manifest, segment.runner.workspace, {
+      const plan = isolationPlan(manifest, deps.repositoryRoot(), {
         argv: invocation.argv,
         segmentId: segment.segmentId,
+        storage: segment.runner.workspace,
+        env: runCredential(),
       })
       const result = await supervisor.launch(plan, segment.runner)
       // The barrier is released only after the run's identities are known, so the runner cannot begin work

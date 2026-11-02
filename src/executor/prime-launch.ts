@@ -19,6 +19,8 @@ export const AUTONOMOUS_FLAGS = [
   '--autonomous-max-tokens',
   '--autonomous-timeout-ms',
   '--goal',
+  '--provider',
+  '--model',
 ] as const
 
 /** The limits one segment runs under. They come from the approved environment, not from the code. */
@@ -60,6 +62,8 @@ export interface LaunchInvocation {
   barrier: BootstrapBarrier
   /** The goal the segment is bounded to. */
   goal: string
+  /** The prompt the runner reads; it names the specification, the report and the barrier. */
+  prompt: string
 }
 
 /** The goal of a segment: every automatable task of the approved range, ending at the human gate. */
@@ -85,12 +89,22 @@ function gateArgument(check: ApprovedCheck): string {
  */
 export function buildLaunchInvocation(
   manifest: ApprovedManifest,
-  options: { taskIds: readonly string[]; nextGateId?: string; barrier: BootstrapBarrier; limits?: Partial<LaunchLimits> },
+  options: { taskIds: readonly string[]; nextGateId?: string; barrier: BootstrapBarrier; reportPath: string; limits?: Partial<LaunchLimits> },
 ): LaunchInvocation {
   const limits = { ...DEFAULT_LIMITS, ...options.limits }
   const goal = segmentGoal(manifest, options.taskIds, options.nextGateId)
+  const prompt = segmentPrompt({
+    featureDir: manifest.featureDir,
+    taskIds: options.taskIds,
+    nextGateId: options.nextGateId,
+    reportPath: options.reportPath,
+    barrierPath: options.barrier.path,
+  })
   const argv = [
     manifest.environment.runner.cli,
+    // The model comes from the approved manifest, so the run uses the model the operator approved.
+    '--provider', manifest.environment.model.provider,
+    '--model', manifest.environment.model.id,
     '--autonomous',
     '--autonomous-gate-retries', String(limits.gateRetries),
     '--autonomous-max-turns', String(limits.maxTurns),
@@ -100,7 +114,10 @@ export function buildLaunchInvocation(
     '--goal', goal,
   ]
   for (const check of manifest.checks) argv.push('--autonomous-gate', gateArgument(check))
-  return { argv, barrier: options.barrier, goal }
+  // The prompt tells the runner which specification to read, where its report belongs, and that it waits for the
+  // barrier, so it cannot begin before the controller has recorded the run's identity.
+  argv.push(prompt)
+  return { argv, barrier: options.barrier, goal, prompt }
 }
 
 /**

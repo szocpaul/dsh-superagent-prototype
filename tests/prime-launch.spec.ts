@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildLaunchInvocation, segmentGoal, segmentPrompt, DEFAULT_LIMITS } from '../src/executor/prime-launch.ts'
+import { runCredential } from '../src/app/prime-service.ts'
 import type { ApprovedManifest } from '../src/executor/prime-model.ts'
 
 const manifest = {
@@ -20,6 +21,7 @@ describe('the bounded autonomous invocation', () => {
       taskIds: ['T010', 'T011'],
       nextGateId: 'T012',
       barrier: { path: '/tmp/barrier', release: 'seg:1' },
+      reportPath: '/tmp/runner-report.md',
     })
     expect(invocation.argv[0]).toBe('prime-agent')
     expect(invocation.argv).toContain('--autonomous')
@@ -28,6 +30,30 @@ describe('the bounded autonomous invocation', () => {
     const gate = invocation.argv[invocation.argv.indexOf('--autonomous-gate') + 1]
     expect(gate).toContain('vitest')
     expect(gate).toContain('tests/prime-*.spec.ts')
+  })
+
+  it('names the approved model, so the run uses the model the operator approved', () => {
+    const invocation = buildLaunchInvocation(manifest, { taskIds: ['T010'], barrier: { path: '/b', release: 'r' }, reportPath: '/tmp/runner-report.md' })
+    expect(invocation.argv[invocation.argv.indexOf('--provider') + 1]).toBe('minimax')
+    expect(invocation.argv[invocation.argv.indexOf('--model') + 1]).toBe('MiniMax-M3.1-Flash')
+  })
+
+  it('gives the run only the credential the deployment approved, and never a value of its own', () => {
+    const name = process.env.DSH_PRIME_CREDENTIAL_ENV
+    const previous = process.env.DSH_PRIME_CREDENTIAL_ENV
+    const value = process.env['DSH_PRIME_TEST_KEY']
+    process.env.DSH_PRIME_CREDENTIAL_ENV = 'DSH_PRIME_TEST_KEY'
+    process.env['DSH_PRIME_TEST_KEY'] = 'a-secret'
+    try {
+      expect(runCredential()).toEqual({ DSH_PRIME_TEST_KEY: 'a-secret' })
+      delete process.env['DSH_PRIME_TEST_KEY']
+      expect(runCredential()).toEqual({})
+    } finally {
+      if (previous === undefined) delete process.env.DSH_PRIME_CREDENTIAL_ENV
+      else process.env.DSH_PRIME_CREDENTIAL_ENV = previous
+      if (value !== undefined) process.env['DSH_PRIME_TEST_KEY'] = value
+      else delete process.env['DSH_PRIME_TEST_KEY']
+    }
   })
 
   it('bounds the goal to the approved task range and the human gate', () => {
@@ -43,7 +69,7 @@ describe('the bounded autonomous invocation', () => {
   })
 
   it('uses the default limits when the manifest approves none', () => {
-    const invocation = buildLaunchInvocation(manifest, { taskIds: [], barrier: { path: '/b', release: 'r' } })
+    const invocation = buildLaunchInvocation(manifest, { taskIds: [], barrier: { path: '/b', release: 'r' }, reportPath: '/tmp/runner-report.md' })
     const turns = invocation.argv[invocation.argv.indexOf('--autonomous-max-turns') + 1]
     expect(turns).toBe(String(DEFAULT_LIMITS.maxTurns))
   })
