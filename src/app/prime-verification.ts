@@ -94,7 +94,8 @@ export function revisionPort(commands: Commands, root: string, branch?: string):
       // and no change to commit. The result is still a revision of its own, or the delivery would have nothing to
       // publish and the run would end without a result.
       if (input.files.length > 0) await git(['add', '--', ...input.files.map(file => file.path)])
-      await git(['-c', 'user.name=dsh-superagent', '-c', `user.email=${process.env.DSH_PRIME_COMMIT_EMAIL ?? 'dsh-superagent@users.noreply.github.com'}`, 'commit', '--no-verify', '--allow-empty', '-m', input.message])
+      const date = input.date ? ['-c', `GIT_AUTHOR_DATE=${input.date}`, '-c', `GIT_COMMITTER_DATE=${input.date}`] : []
+      await git(['-c', 'user.name=dsh-superagent', '-c', `user.email=${process.env.DSH_PRIME_COMMIT_EMAIL ?? 'dsh-superagent@users.noreply.github.com'}`, ...date, 'commit', '--no-verify', '--allow-empty', '-m', input.message])
       const commit = await git(['rev-parse', 'HEAD'])
       if (parent) await git(['reset', '--mixed', parent])
       return commit
@@ -188,7 +189,7 @@ export async function verifySegment(options: {
   // directory of the host.
   const verifier = verifierPort(commands, root, storage)
   const environment = verifierEnvironment(storage)
-  const resultRevision = await createResultRevision(snapshot, manifest.allowedPaths, committer)
+  const resultRevision = await createResultRevision(snapshot, manifest.allowedPaths, committer, segment.createdAt)
   const checks = await rerunChecks(manifest.checks, resultRevision, verifier, environment)
   const assessment = assessHost ? await assess(manifest, segment, 1, assessHost) : undefined
   return verify({

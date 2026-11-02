@@ -130,6 +130,21 @@ describe('a run whose runner never started', () => {
     expect(host.store.bridge.segments.get(segment.segmentId)?.phase).not.toBe('launching')
   })
 
+  it('publishes again a segment whose delivery failed once', () => {
+    const host = harness()
+    const segment = reserve(host)
+    host.store.bridge.segments.save({ ...segment, phase: 'blocked' })
+    host.store.bridge.failures.save({
+      id: `${segment.segmentId}-delivery-2026-11-01T00:00:00.000Z`, ticketId: segment.ticketId, cause: 'delivery',
+      summary: 'The remote outcome of the delivery is unknown', evidence: 'the delivery evidence',
+      nextAction: 'Retry the delivery', at: '2026-11-01T00:00:00.000Z',
+    })
+    host.bridge.reconcileOpenSegments()
+    const effect = host.store.db.prepare('SELECT kind FROM effect WHERE kind = ? AND key = ?').get('prime-deliver', segment.segmentId)
+    expect(effect).toBeDefined()
+    host.dispose()
+  })
+
   it('leaves a segment whose state cannot be established alone, when no launch failed', async () => {
     const segment = reserve(host)
     host.store.bridge.segments.save({ ...segment, phase: 'unknown' })

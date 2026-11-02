@@ -249,7 +249,13 @@ export class PrimeBridge {
     for (const segment of this.host.store.bridge.segments.list()) {
       // A segment that already left the runner's phase is driven by its own effect, and an unknown delivery waits for
       // an operator; reconciling it again would repeat the verification and the delivery without a new reason.
-      if (['stopped', 'ready', 'blocked', 'failed', 'verifying', 'gate_wait'].includes(segment.phase)) continue
+      if (['stopped', 'ready', 'blocked', 'failed', 'verifying', 'gate_wait'].includes(segment.phase)) {
+        // A segment whose delivery failed may publish again once: the branch head it saw may have been its own push.
+        if (segment.phase === 'blocked' && this.deliveryFailures(segment) === 1) {
+          this.host.effects.enqueueSegment('prime-deliver', segment.segmentId, segment.generation)
+        }
+        continue
+      }
       this.host.effects.enqueueSegment('prime-reconcile', segment.segmentId, segment.generation)
     }
   }
@@ -563,6 +569,12 @@ export class PrimeBridge {
         baseRevision: decision.gateCommit ?? segment.baseRevision,
       })
     })
+  }
+
+  /** How many times the delivery of a segment failed, so a retry can be bounded. */
+  private deliveryFailures(segment: BridgeSegment): number {
+    return this.host.store.bridge.failures.byTicket(segment.ticketId)
+      .filter(record => (record.id ?? '').startsWith(segment.segmentId) && record.cause === 'delivery').length
   }
 
   /** How many times the launch of a segment failed, so a retry can be bounded. */

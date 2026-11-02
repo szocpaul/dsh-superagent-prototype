@@ -52,7 +52,7 @@ export interface ScopeAudit {
 /** The controller's commit of the approved snapshot. */
 export interface RevisionPort {
   /** Creates the controller's commit of the given files and returns its revision. */
-  commit(input: { files: { path: string; content: Buffer }[]; message: string }): Promise<string>
+  commit(input: { files: { path: string; content: Buffer }[]; message: string; date?: string }): Promise<string>
 }
 
 /** The verifier that reruns one approved check against the exact revision. */
@@ -226,11 +226,14 @@ export async function createResultRevision(
   snapshot: WorkspaceSnapshot,
   approvedPaths: string[],
   committer: RevisionPort = contentAttestation,
+  date?: string,
 ): Promise<string> {
   const files = snapshot.files
     .filter(file => inScope(file.path, approvedPaths))
     .map(file => ({ path: file.path, content: file.content }))
-  return committer.commit({ files, message: 'controller: the verified result of a Prime Runner Bridge segment' })
+  // The revision carries a fixed date, so the same result yields the same commit every time: a delivery that runs
+  // again finds the revision it published before instead of a new one the branch head does not carry.
+  return committer.commit({ files, message: 'controller: the verified result of a Prime Runner Bridge segment', ...date ? { date } : {} })
 }
 
 /**
@@ -373,7 +376,7 @@ export async function verify(options: VerifyOptions): Promise<VerificationResult
   }
   const audit = scopeAudit(snapshot, manifest.allowedPaths)
   if (!audit.approved) reasons.push(`the run wrote outside the approved paths: ${audit.outOfScopePaths.join(', ')}`)
-  const revision = await createResultRevision(snapshot, manifest.allowedPaths, options.committer)
+  const revision = await createResultRevision(snapshot, manifest.allowedPaths, options.committer, segment.createdAt)
   const checks = await rerunChecks(manifest.checks, revision, verifier, options.environment ?? {})
   for (const check of checks) {
     if (check.exitCode !== 0) reasons.push(`the check ${check.name} failed against the result revision with exit code ${check.exitCode}`)
