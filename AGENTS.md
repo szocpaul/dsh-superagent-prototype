@@ -245,6 +245,18 @@ GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git p
   the files the runner changed and the SHA-256 of each of them, and the controller
   derives the same list from the workspace's own version control and compares
   every path and every digest.
+- **The run's checkout is the repository itself.** The scope audit reads the
+  working tree of the checkout, so an edit that the bridge's own development makes
+  during a live run is a write outside the approved paths, and the run is blocked
+  for it. The bridge's own fixes therefore belong to a commit made before the run
+  starts, never during one. The worker-agent's own commit lands in the same
+  checkout, so the same rule applies to it.
+- **The controller's identity cannot read the detailed protection rules of a
+  branch.** They need administrative access, which the controller deliberately
+  does not have, so the server answers 404 and every delivery ended with an
+  unknown remote outcome. The merge guard is proven from what the controller's own
+  identity may do: the target branch carries a protection rule, and the
+  controller can neither administer nor maintain the repository.
 - **The Feishu consumer's health had one race.** The consumer's ready report and
   the error a malformed event reports arrive on two streams in either order, and the
   ready report could erase the error. The consumer keeps the error now, and
