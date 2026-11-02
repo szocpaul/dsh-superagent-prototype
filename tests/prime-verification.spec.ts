@@ -65,6 +65,25 @@ describe('the host verification', () => {
     }
   })
 
+  it('creates the controller commit on the branch of the run', async () => {
+    const root = await gitRoot()
+    try {
+      await exec('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'base'], { cwd: root })
+      const parent = (await exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim()
+      const committer = revisionPort(gitCommands(root), root, 'agent/ticket-1')
+      const revision = await committer.commit({
+        files: [{ path: 'src/smoke.ts', content: Buffer.from('export const smoke = () => "smoke"\n') }],
+        message: 'controller: the verified result',
+      })
+      // The revision is a child of the head of the branch of the run, so the delivery can publish it there.
+      expect((await exec('git', ['rev-parse', `${revision}^`], { cwd: root })).stdout.trim()).toBe(parent)
+      // The checkout holds the branch of the run.
+      expect((await exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root })).stdout.trim()).toBe('agent/ticket-1')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('reruns a check against the exact revision in a separate checkout', async () => {
     const root = await gitRoot()
     try {

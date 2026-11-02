@@ -25,6 +25,7 @@ import { buildLaunchInvocation, AUTONOMOUS_FLAGS } from '../executor/prime-launc
 import { preflight, type PreflightHost } from '../executor/prime-preflight.ts'
 import { approvalEvidence, approvalIsCurrent, approveRun, denyRun, verifyGateCommit, verifyGateDecision, type AccountType,
   type ApprovalEvidence, type ApprovalSource } from './prime-approval.ts'
+import { checkoutRunBranch } from './prime-verification.ts'
 import { readCommit } from '../sources/github-read.ts'
 import { policyVersion } from '../policy.ts'
 import { z } from 'zod'
@@ -360,6 +361,12 @@ export function runCredential(): Record<string, string> {
 export function runnerAdapter(supervisor: PrimeSupervisor, deps: PrimeServiceDeps): RunnerPort {
   return {
     async launch(segment: BridgeSegment, manifest: ApprovedManifest): Promise<{ sessionId?: string; sessionFile?: string }> {
+      // The runner works in the repository itself, so the checkout has to hold the branch of the run: a continuation
+      // has to see the revision the previous segment published, and the revision the controller creates later has to
+      // sit on that same branch.
+      const commands = deps.commands()
+      const root = deps.repositoryRoot()
+      await checkoutRunBranch(async args => (await commands.git(args, root)).trim(), segment.runner.branch)
       const barrierPath = join(segment.runner.workspace, '.prime-bridge-barrier')
       const sessionDir = join(segment.runner.workspace, 'session')
       const invocation = buildLaunchInvocation(manifest, {

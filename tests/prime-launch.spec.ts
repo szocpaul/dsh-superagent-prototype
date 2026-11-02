@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { buildLaunchInvocation, segmentGoal, segmentPrompt, DEFAULT_LIMITS } from '../src/executor/prime-launch.ts'
-import { runCredential, writeRunnerModel } from '../src/app/prime-service.ts'
-import type { ApprovedManifest } from '../src/executor/prime-model.ts'
+import { runCredential, runnerAdapter, writeRunnerModel, type PrimeServiceDeps } from '../src/app/prime-service.ts'
+import type { PrimeSupervisor } from '../src/executor/prime-supervisor.ts'
+import type { Commands } from '../src/infra/commands.ts'
+import type { ApprovedManifest, BridgeSegment } from '../src/executor/prime-model.ts'
+
+const exec = promisify(execFile)
 
 const manifest = {
   environment: {
@@ -166,5 +172,42 @@ describe('the bounded autonomous invocation', () => {
     })
     expect(prompt).toContain('T010 through T011')
     expect(prompt).not.toContain('T013')
+  })
+})
+
+describe('the runner adapter', () => {
+  /** A repository with one commit, so the checkout has a branch to leave. */
+  const gitRoot = async (): Promise<string> => {
+    const root = mkdtempSync(join(tmpdir(), 'prime-launch-'))
+    await exec('git', ['init', '--quiet'], { cwd: root })
+    await exec('git', ['config', 'user.email', 'test@example.com'], { cwd: root })
+    await exec('git', ['config', 'user.name', 'test'], { cwd: root })
+    await exec('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'base'], { cwd: root })
+    return root
+  }
+
+  it('puts the checkout on the branch of the run before the runner starts', async () => {
+    const root = await gitRoot()
+    try {
+      mkdirSync(join(root, 'workspace'), { recursive: true })
+      const commands = { git: async (args: string[], cwd: string) => (await exec('git', args, { cwd })).stdout } as unknown as Commands
+      const supervisor = {
+        launch: async () => ({ identity: { sessionId: 'session-1', sessionFile: '/run/session-1.jsonl' } }),
+      } as unknown as PrimeSupervisor
+      const deps = { commands: () => commands, repositoryRoot: () => root } as unknown as PrimeServiceDeps
+      const segment = {
+        segmentId: 'segment-1', ticketId: 'ticket-1', assignmentId: 'assignment-1', generation: 1, stopEpoch: 0,
+        taskIds: ['T004'], nextGateId: null,
+        runner: {
+          serviceUnit: 'dsh-prime-segment1', cgroup: '/sys/fs/cgroup/dsh-prime-segment1', tmux: 'dsh-prime-segment1',
+          socket: join(root, 'socket'), workspace: join(root, 'workspace'), branch: 'agent/ticket-1',
+        },
+      } as unknown as BridgeSegment
+      await runnerAdapter(supervisor, deps).launch(segment, manifest)
+      // The runner works in the repository itself, so it has to find the branch of the run there.
+      expect((await exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root })).stdout.trim()).toBe('agent/ticket-1')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

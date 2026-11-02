@@ -42,12 +42,35 @@ export function verifierEnvironment(workspace: string): Record<string, string | 
 }
 
 /**
+ * Puts the checkout on the branch of the run.
+ *
+ * The branch of the run may not be in the checkout yet: the delivery creates it on the remote, and the human's gate
+ * commit reaches the remote too. The remote is the truth about that branch, so it is asked first, and the local
+ * branch follows it. A branch that exists nowhere is created at the current head, which is where the first delivery
+ * publishes the result of the run.
+ */
+export async function checkoutRunBranch(git: (args: string[]) => Promise<string>, branch: string): Promise<void> {
+  await git(['fetch', '--quiet', 'origin', branch]).catch(() => undefined)
+  const remote = await git(['rev-parse', '--verify', `refs/remotes/origin/${branch}`]).catch(() => undefined)
+  if (remote) {
+    await git(['checkout', '-B', branch, `origin/${branch}`])
+    return
+  }
+  const local = await git(['rev-parse', '--verify', `refs/heads/${branch}`]).catch(() => undefined)
+  if (local) {
+    await git(['checkout', branch])
+    return
+  }
+  await git(['checkout', '-b', branch])
+}
+
+/**
  * The repository adapter that creates the controller's commit of the approved result.
  *
- * The commit is created in the run's own workspace, on a branch named after the segment, and it holds only the
- * files the approved scope allows. The commit is local: pushing it is the delivery's own decision.
+ * The commit is created in the run's own workspace, on the branch of the run, and it holds only the files the
+ * approved scope allows. The commit is local: pushing it is the delivery's own decision.
  */
-export function revisionPort(commands: Commands, root: string): RevisionPort {
+export function revisionPort(commands: Commands, root: string, branch?: string): RevisionPort {
   return {
     async commit(input) {
       for (const file of input.files) {
@@ -56,6 +79,9 @@ export function revisionPort(commands: Commands, root: string): RevisionPort {
         writeFileSync(target, file.content)
       }
       const git = async (args: string[]) => (await commands.git(args, root)).trim()
+      // The revision belongs to the branch of the run: the checkout may hold another branch, and the delivery
+      // publishes the revision on the branch of the run, so the commit has to sit on it.
+      if (branch) await checkoutRunBranch(git, branch)
       // The branch the checkout is on keeps no trace of the run's result: the commit is created, published under its
       // own name, and the branch returns to the baseline with the files in the working tree.
       const parent = await git(['rev-parse', 'HEAD']).catch(() => undefined)
@@ -151,7 +177,8 @@ export async function verifySegment(options: {
   const { commands, root, manifest, segment, report, storage, assessHost } = options
   // The changed files are the ones of the repository the runner worked in; the run's own storage holds its report.
   const snapshot = await collectSnapshot(commands, root, manifest.allowedPaths)
-  const committer = revisionPort(commands, root)
+  // The revision belongs to the branch of the run, so the commit is created there.
+  const committer = revisionPort(commands, root, segment.runner.branch)
   // The verifier keeps its scratch copy in the run's own storage, so the check does not fill the small temporary
   // directory of the host.
   const verifier = verifierPort(commands, root, storage)
