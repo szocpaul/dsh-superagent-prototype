@@ -36,19 +36,24 @@ the disposable feature `specs/002-smoke-fixture`. The plan is in
 `specs/001-prime-runner-bridge/t054-plan.md`; the operator's steps are in
 `specs/001-prime-runner-bridge/operator-steps.md`.
 
-**The state at the end of 2026-11-02**: the smoke found that the bridge's runner
-launch path had never been completed. The controller side works up to the launch;
-the runner side did not, and four defects were fixed (the approval comment's route,
-the socket directory, the cgroup of a run that is gone, and the runner's command
-inside the confinement). The operator then chose the network and credential model
-for the run, which is implemented. Both runner segments were stopped, so the runner
-slot is free, and no request is waiting on issue #4.
+**The state at the end of 2026-11-02 (evening)**: the smoke has found and fixed
+**fourteen** defects in the bridge's runner launch path, which had never been
+exercised. The whole chain now works up to the delivery:
 
-Two gaps are still open before a run can reach the manual gate: the runner contract
-does not say how the runner computes the workspace snapshot digest that its report
-carries, and the quota guard reads a session file whose path the run does not name.
-The delivery after the gate (the candidate commit and the branch of the pull
-request) is untested as well.
+- the controller side works: request, manifest, digest, approval, reservation,
+  preflight, launch, barrier, reconcile, report, verification;
+- the runner side works: it starts in the confinement, sets its kernel up, writes
+  the two approved files, leaves the gate untouched, and writes its report;
+- the **verification passes**: both approved checks exit 0 against the candidate
+  revision, the scope audit is clean, and the verdict is `ready`;
+- the **delivery** was fixed last (it asked for the protection of the branch that
+  does not exist yet, and read the server's answer in the wrong shape) and is
+  deployed, but no run has completed it yet.
+
+The runner slot is free, the service runs, and the last worker is diagnosing the
+known flaky test in `tests/sources.spec.ts` instead of building the manifest. The
+next run needs the operator's approval of the digest the system posts, and the
+gate after it.
 
 **Do not write the digest down.** The manifest names its baseline commit, so every
 commit invalidates it. Read the digest the Ticket's question names, in the panel or
@@ -182,9 +187,10 @@ GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git p
   `max-tokens` in the middle of a repair and left the Ticket with a stale
   `running` assignment; the panel's retry is refused when the last assignment
   reported nothing, so the operator stops the Ticket and posts a fresh request.
-- **`tests/sources.spec.ts` has one flaky test.** "takes in the event lines it reads"
-  fails in a full run and passes alone; it is unchanged since the upstream commit.
-  Treat it as known, not as a regression.
+- **The Feishu consumer's health had one race.** The consumer's ready report and
+  the error a malformed event reports arrive on two streams in either order, and the
+  ready report could erase the error. The consumer keeps the error now, and
+  `tests/sources.spec.ts` proves it.
 
 ## What the workers may and may not do
 
