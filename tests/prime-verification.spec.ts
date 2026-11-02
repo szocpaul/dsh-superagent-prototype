@@ -121,10 +121,64 @@ describe('the host verification', () => {
     const environment = verifierEnvironment('/tmp/workspace')
     expect(environment.GH_TOKEN).toBeUndefined()
     expect(environment.GITHUB_TOKEN).toBeUndefined()
+    expect(environment.GIT_CONFIG_GLOBAL).toBeUndefined()
     expect(environment.HOME).toBe('/tmp/workspace')
     for (const [name, value] of Object.entries(environment)) {
       if (value === undefined) continue
       expect(name).not.toMatch(/(TOKEN|SECRET|PASSWORD|APIKEY|API_KEY|CREDENTIAL)$/)
+    }
+  })
+
+  it('gives the check no credential and no git identity of the controller', async () => {
+    const root = await gitRoot()
+    const model = process.env.MINIMAX_API_KEY
+    const identity = process.env.GIT_CONFIG_GLOBAL
+    process.env.MINIMAX_API_KEY = 'the model key of the deployment'
+    process.env.GIT_CONFIG_GLOBAL = join(root, 'worker-gitconfig')
+    try {
+      await exec('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'base'], { cwd: root })
+      const revision = (await exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim()
+      const verifier = verifierPort(gitCommands(root), root)
+      const outcome = await verifier.run(
+        {
+          name: 'env',
+          argv: ['sh', '-c', 'echo "key=${MINIMAX_API_KEY-unset} git=${GIT_CONFIG_GLOBAL-unset} home=${HOME-unset}"'],
+          cwd: '.',
+          timeoutMs: 30_000,
+        },
+        revision,
+        verifierEnvironment(root),
+      )
+      expect(outcome.exitCode).toBe(0)
+      expect(outcome.evidence).toContain('key=unset')
+      expect(outcome.evidence).toContain('git=unset')
+      expect(outcome.evidence).toContain(`home=${root}`)
+    } finally {
+      if (model === undefined) delete process.env.MINIMAX_API_KEY
+      else process.env.MINIMAX_API_KEY = model
+      if (identity === undefined) delete process.env.GIT_CONFIG_GLOBAL
+      else process.env.GIT_CONFIG_GLOBAL = identity
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the scratch copy of the check in the storage the caller names', async () => {
+    const root = await gitRoot()
+    const storage = mkdtempSync(join(tmpdir(), 'prime-storage-'))
+    try {
+      await exec('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'base'], { cwd: root })
+      const revision = (await exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim()
+      const verifier = verifierPort(gitCommands(root), root, storage)
+      const outcome = await verifier.run(
+        { name: 'cwd', argv: ['sh', '-c', 'pwd'], cwd: '.', timeoutMs: 30_000 },
+        revision,
+        verifierEnvironment(root),
+      )
+      expect(outcome.exitCode).toBe(0)
+      expect(outcome.evidence.startsWith(storage)).toBe(true)
+    } finally {
+      rmSync(storage, { recursive: true, force: true })
+      rmSync(root, { recursive: true, force: true })
     }
   })
 

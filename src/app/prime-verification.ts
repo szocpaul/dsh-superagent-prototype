@@ -19,7 +19,13 @@ import { assess, collectSnapshot, createResultRevision, rerunChecks, verify, typ
 
 const exec = promisify(execFile)
 
-/** The environment the verifier runs in: nothing that names a credential, and a private home. */
+/**
+ * The environment the verifier runs in: nothing that names a credential, and a private home.
+ *
+ * The map is the whole environment of the check, not an addition to the environment of the controller: a check that
+ * reruns an untrusted revision must not inherit the deployment's model key, its GitHub token, or the git identity
+ * that points at the deployment's credential helper.
+ */
 export function verifierEnvironment(workspace: string): Record<string, string | undefined> {
   return {
     HOME: workspace,
@@ -29,6 +35,7 @@ export function verifierEnvironment(workspace: string): Record<string, string | 
     CI: '1',
     GIT_TERMINAL_PROMPT: '0',
     GIT_ASKPASS: '',
+    GIT_CONFIG_GLOBAL: undefined,
     GH_TOKEN: undefined,
     GITHUB_TOKEN: undefined,
   }
@@ -86,11 +93,18 @@ export function verifierPort(commands: Commands, root: string, storage = tmpdir(
         // finds and refuses a linked one.
         const dependencies = join(root, 'node_modules')
         if (existsSync(dependencies)) cpSync(dependencies, join(scratch, 'node_modules'), { recursive: true, verbatimSymlinks: true })
-        // The checkout holds no credential helper, so a check cannot reach GitHub even if it tried.
+        // The checkout holds no credential helper, so a check cannot reach GitHub even if it tried: an empty helper
+        // resets the list the global configuration of the controller would otherwise add.
         await git(['config', '--local', '--unset-all', 'credential.helper'], scratch).catch(() => undefined)
+        await git(['config', '--local', 'credential.helper', ''], scratch).catch(() => undefined)
+        // The private temporary directory of the check has to exist: the environment names it, and a tool that writes
+        // into it fails when the directory is missing.
+        const temporary = environment.TMPDIR
+        if (temporary) mkdirSync(temporary, { recursive: true })
         const [program, ...args] = check.argv
         if (!program) throw new Error('the check names no program')
-        const result = await exec(program, args, { cwd, env: { ...process.env, ...environment } as NodeJS.ProcessEnv, timeout: check.timeoutMs })
+        // The check runs with the audited environment alone: the environment of the controller never reaches it.
+        const result = await exec(program, args, { cwd, env: environment as NodeJS.ProcessEnv, timeout: check.timeoutMs })
         return { exitCode: 0, evidence: result.stdout.trim().slice(0, 2000) }
       } catch (error) {
         const failure = error as { code?: number; stdout?: string; stderr?: string; message?: string }
@@ -135,7 +149,9 @@ export async function verifySegment(options: {
   // The changed files are the ones of the repository the runner worked in; the run's own storage holds its report.
   const snapshot = await collectSnapshot(commands, root, manifest.allowedPaths)
   const committer = revisionPort(commands, root)
-  const verifier = verifierPort(commands, root)
+  // The verifier keeps its scratch copy in the run's own storage, so the check does not fill the small temporary
+  // directory of the host.
+  const verifier = verifierPort(commands, root, storage)
   const environment = verifierEnvironment(storage)
   const resultRevision = await createResultRevision(snapshot, manifest.allowedPaths, committer)
   const checks = await rerunChecks(manifest.checks, resultRevision, verifier, environment)
