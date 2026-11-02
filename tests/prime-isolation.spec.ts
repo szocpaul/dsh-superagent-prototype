@@ -164,6 +164,16 @@ describe('isolation plan', () => {
     expect(buildBwrapArgs(plan)).not.toContain('--unshare-net')
   })
 
+  it('binds the commands the runner\'s own tooling needs, so its kernel can start', () => {
+    const root = workspace()
+    const tools = mkdtempSync(join(tmpdir(), 'prime-tool-'))
+    const tool = join(tools, 'uv')
+    writeFileSync(tool, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const plan = isolationPlan(manifest(), root, { tools: [tool] })
+    expect(plan.readOnlyPaths).toContain(tools)
+    expect(plan.env.PATH).toContain(tools)
+  })
+
   it('binds the storage of the run writable and gives the runner its home there', () => {
     const root = workspace()
     const storage = join(root, 'storage')

@@ -254,6 +254,16 @@ export function hostRunEnvironment(commands: Commands): RunEnvironment {
 }
 
 /**
+ * The commands the runner's own tooling needs inside the confinement.
+ *
+ * The runner's kernel is set up by the deployment's own tool manager, and the confinement binds it read-only, so the
+ * runner can start the tool its only interface runs on.
+ */
+export function runnerTools(): string[] {
+  return (process.env.DSH_PRIME_RUNNER_TOOLS ?? '').split(',').map(item => item.trim()).filter(Boolean)
+}
+
+/**
  * The credential the operator approved for the run, in the environment the runner sees.
  *
  * The manifest names the credential by category, never by value; the deployment names the environment variable
@@ -293,6 +303,7 @@ export function runnerAdapter(supervisor: PrimeSupervisor, deps: PrimeServiceDep
         segmentId: segment.segmentId,
         storage: segment.runner.workspace,
         env: runCredential(),
+        tools: runnerTools(),
       })
       const result = await supervisor.launch(plan, segment.runner)
       // The barrier is released only after the run's identities are known, so the runner cannot begin work

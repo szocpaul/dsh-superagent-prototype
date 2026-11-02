@@ -76,6 +76,8 @@ export interface IsolationPlanOptions {
   systemPaths?: string[]
   /** The run's own storage, bound writable; the runner's session and its report live there. */
   storage?: string
+  /** The commands the runner's own tooling needs, bound read-only so the confinement can execute them. */
+  tools?: string[]
   /** The environment the host adds to the run; it carries the approved credential of the run. */
   env?: Record<string, string>
 }
@@ -231,7 +233,8 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
   // The runner and the commands the approved checks name are bound read-only, so the confinement can execute them
   // even though the operator's home is masked and only the repository is bound.
   const runner = resolveCommand(manifest.environment.runner.cli)
-  const tools = manifest.checks.map(check => check.argv[0] ?? '').filter(Boolean).map(command => resolveCommand(command))
+  const checks = manifest.checks.map(check => check.argv[0] ?? '').filter(Boolean)
+  const tools = [...checks, ...(options.tools ?? [])].map(command => resolveCommand(command))
   const bound = [runner, ...tools].filter((item): item is BoundCommand => item !== undefined)
   const directories = [...new Set(bound.flatMap(item => [...item.directories, item.searchPath]))]
   const searchPath = [...new Set([...bound.map(item => item.searchPath), '/usr/local/bin', '/usr/bin', '/bin'])].join(':')
