@@ -46,6 +46,25 @@ describe('the host verification', () => {
     }
   })
 
+  it('creates the controller commit of a result that changes no file', async () => {
+    const root = await gitRoot()
+    try {
+      await exec('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'base'], { cwd: root })
+      const parent = (await exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim()
+      const committer = revisionPort(gitCommands(root), root)
+      // A segment that only runs the checks and records the evidence changes no file.
+      const revision = await committer.commit({ files: [], message: 'controller: the verified result' })
+      expect(revision).toMatch(/^[0-9a-f]{40}$/)
+      expect(revision).not.toBe(parent)
+      // The revision is a commit of its own, and it carries no change.
+      const tree = (await exec('git', ['rev-parse', `${revision}^{tree}`], { cwd: root })).stdout.trim()
+      const parentTree = (await exec('git', ['rev-parse', `${parent}^{tree}`], { cwd: root })).stdout.trim()
+      expect(tree).toBe(parentTree)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('reruns a check against the exact revision in a separate checkout', async () => {
     const root = await gitRoot()
     try {

@@ -59,8 +59,11 @@ export function revisionPort(commands: Commands, root: string): RevisionPort {
       // The branch the checkout is on keeps no trace of the run's result: the commit is created, published under its
       // own name, and the branch returns to the baseline with the files in the working tree.
       const parent = await git(['rev-parse', 'HEAD']).catch(() => undefined)
-      await git(['add', '--', ...input.files.map(file => file.path)])
-      await git(['-c', 'user.name=dsh-superagent', '-c', `user.email=${process.env.DSH_PRIME_COMMIT_EMAIL ?? 'dsh-superagent@users.noreply.github.com'}`, 'commit', '--no-verify', '-m', input.message])
+      // A segment that only runs the checks and records the evidence changes no file, so there is nothing to stage
+      // and no change to commit. The result is still a revision of its own, or the delivery would have nothing to
+      // publish and the run would end without a result.
+      if (input.files.length > 0) await git(['add', '--', ...input.files.map(file => file.path)])
+      await git(['-c', 'user.name=dsh-superagent', '-c', `user.email=${process.env.DSH_PRIME_COMMIT_EMAIL ?? 'dsh-superagent@users.noreply.github.com'}`, 'commit', '--no-verify', '--allow-empty', '-m', input.message])
       const commit = await git(['rev-parse', 'HEAD'])
       if (parent) await git(['reset', '--mixed', parent])
       return commit
