@@ -145,6 +145,23 @@ describe('a run whose runner never started', () => {
     host.dispose()
   })
 
+  it('stops publishing again when the delivery keeps failing', () => {
+    const host = harness()
+    const segment = reserve(host)
+    host.store.bridge.segments.save({ ...segment, phase: 'blocked' })
+    for (let index = 0; index < 3; index += 1) {
+      host.store.bridge.failures.save({
+        id: `${segment.segmentId}-delivery-2026-11-01T00:00:0${index}.000Z`, ticketId: segment.ticketId, cause: 'delivery',
+        summary: 'The result could not be delivered', evidence: 'the delivery evidence',
+        nextAction: 'Retry the delivery', at: '2026-11-01T00:00:00.000Z',
+      })
+    }
+    host.bridge.reconcileOpenSegments()
+    const effect = host.store.db.prepare('SELECT kind FROM effect WHERE kind = ? AND key = ?').get('prime-deliver', segment.segmentId)
+    expect(effect).toBeUndefined()
+    host.dispose()
+  })
+
   it('leaves a segment whose state cannot be established alone, when no launch failed', async () => {
     const segment = reserve(host)
     host.store.bridge.segments.save({ ...segment, phase: 'unknown' })

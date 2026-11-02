@@ -251,7 +251,7 @@ export class PrimeBridge {
       // an operator; reconciling it again would repeat the verification and the delivery without a new reason.
       if (['stopped', 'ready', 'blocked', 'failed', 'verifying', 'gate_wait'].includes(segment.phase)) {
         // A segment whose delivery failed may publish again once: the branch head it saw may have been its own push.
-        if (segment.phase === 'blocked' && this.deliveryFailures(segment) === 1) {
+        if (segment.phase === 'blocked' && this.deliveryFailures(segment) < 3) {
           this.host.effects.enqueueSegment('prime-deliver', segment.segmentId, segment.generation)
         }
         continue
