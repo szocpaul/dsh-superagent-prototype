@@ -15,6 +15,7 @@ import { decideRecovery, stopFence } from './prime-recovery.ts'
 import type { TaskLine } from './prime-tasks.ts'
 import { Later, type Effects } from '../app/effects.ts'
 import type { Store } from '../app/store.ts'
+import { socketPath } from '../infra/prime-isolation.ts'
 
 /** What the coordinator needs from the approval protocol. */
 export interface ApprovalPort {
@@ -271,7 +272,7 @@ export class PrimeBridge {
         serviceUnit: `dsh-prime-${segmentId.slice(0, 8)}`,
         cgroup: `/sys/fs/cgroup/dsh-prime-${segmentId.slice(0, 8)}`,
         tmux: `dsh-prime-${segmentId.slice(0, 8)}`,
-        socket: `/run/dsh-prime/${segmentId}.sock`,
+        socket: socketPath(segmentId),
         workspace: request.workspace,
         branch: request.branch,
       },

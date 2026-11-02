@@ -121,9 +121,21 @@ export function tmuxServerName(segmentId: string): string {
   return `prime-runner-tmux-${identityKey(segmentId)}`
 }
 
+/**
+ * The directory the private Prime daemon sockets live in.
+ *
+ * The bridge creates this directory before a run starts, so the path has to be
+ * writable by the deployment account. The account's own runtime directory is
+ * private to it, while the system runtime directory (`/run`) belongs to root
+ * and cannot be created without privileges.
+ */
+export function socketDirectory(runtimeRoot = process.env.XDG_RUNTIME_DIR || tmpdir()): string {
+  return join(runtimeRoot, 'dsh-prime')
+}
+
 /** The path of the private Prime daemon socket of one run. */
-export function socketPath(segmentId: string): string {
-  return `/run/prime-runner/${identityKey(segmentId)}.sock`
+export function socketPath(segmentId: string, runtimeRoot = process.env.XDG_RUNTIME_DIR || tmpdir()): string {
+  return join(socketDirectory(runtimeRoot), `${identityKey(segmentId)}.sock`)
 }
 
 /** The first regular file of a directory, used as the read-only sample of the hardlink probe. */

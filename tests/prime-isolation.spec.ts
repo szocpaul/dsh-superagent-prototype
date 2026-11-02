@@ -4,9 +4,9 @@
  * deterministic run identities, the containment probes, and the stop, quiescence and cleanup verdicts. Every
  * external effect is faked, so the tests need no bubblewrap, systemd, or root.
  */
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, linkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, linkSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   buildBwrapArgs,
@@ -24,6 +24,7 @@ import {
   verifyConfinement,
   IsolationError,
 } from '../src/infra/prime-isolation.ts'
+import { harness, reserve } from './fixtures/prime-bridge-host.ts'
 import type { IsolationPlan, IsolationRunner, ProbeAttempt, ProbeKind } from '../src/infra/prime-isolation.ts'
 import { PrimeSupervisor } from '../src/executor/prime-supervisor.ts'
 import type { RunEnvironment } from '../src/executor/prime-supervisor.ts'
@@ -152,6 +153,33 @@ describe('deterministic run identities', () => {
     const names = ['seg-1', 'seg-2', 'seg-1 '].map(id => [systemdUnitName(id), cgroupPath(id), tmuxServerName(id), socketPath(id)])
     expect(new Set(names.flat()).size).toBe(names.flat().length)
     expect(systemdUnitName('seg-1')).not.toBe(tmuxServerName('seg-1'))
+  })
+
+  it('keeps the run socket in a directory the deployment account owns', () => {
+    const runtimeRoot = process.env.XDG_RUNTIME_DIR || tmpdir()
+    expect(dirname(socketPath('seg-1')).startsWith(runtimeRoot)).toBe(true)
+  })
+
+  it('creates the socket directory of a run without privileges', () => {
+    const root = mkdtempSync(join(tmpdir(), 'prime-runtime-'))
+    try {
+      const directory = dirname(socketPath('seg-1', root))
+      mkdirSync(directory, { recursive: true })
+      expect(existsSync(directory)).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('names the socket of a reserved segment after that same directory', () => {
+    const host = harness()
+    try {
+      const segment = reserve(host)
+      expect(segment.runner.socket).toBe(socketPath(segment.segmentId))
+      expect(dirname(segment.runner.socket).startsWith(process.env.XDG_RUNTIME_DIR || tmpdir())).toBe(true)
+    } finally {
+      host.dispose()
+    }
   })
 })
 
