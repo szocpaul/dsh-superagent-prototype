@@ -452,6 +452,15 @@ export function pullPort(commands: Commands, root: string): PullPort {
         return { ok: false, reason: String(error) }
       }
     },
+    async pullForBranch(branch: string): Promise<number | undefined> {
+      // The pull request of a branch is found on the server: the ledger of the controller is memory, and a restart
+      // empties it, while the pull request stays open.
+      const found = await api<{ number: number }[]>('pulls', '-f', `head=${branch}`, '-f', 'state=open').catch(() => [] as { number: number }[])
+      return found[0]?.number
+    },
+    async treeOf(revision: string): Promise<string | undefined> {
+      try { return (await commands.git(['rev-parse', `${revision}^{tree}`], root)).trim() } catch { return undefined }
+    },
     async pull(number: number): Promise<PullState> {
       const pull = await api<Record<string, unknown>>(`pulls/${number}`)
       return {

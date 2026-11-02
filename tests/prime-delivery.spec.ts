@@ -18,6 +18,7 @@ import { autoMergeEnabled, pullIsOpen } from '../src/sources/github-pull.ts'
 
 class FakePort implements PullPort {
   heads = new Map<string, string>()
+  trees = new Map<string, string>()
   pulls = new Map<number, PullState>()
   protection: BranchProtection = { required: true, forbidsMerge: true }
   pushes: { branch: string; commit: string; expectedOldSha: string }[] = []
@@ -54,6 +55,17 @@ class FakePort implements PullPort {
     if (head !== undefined && head !== expectedOldSha) return { ok: false, reason: `head is ${head}` }
     this.heads.set(branch, commit)
     return { ok: true }
+  }
+
+  async pullForBranch(branch: string): Promise<number | undefined> {
+    this.maybeFail('pullForBranch')
+    for (const [number, state] of this.pulls) if (state.head === branch) return number
+    return undefined
+  }
+
+  async treeOf(revision: string): Promise<string | undefined> {
+    this.maybeFail('treeOf')
+    return this.trees.get(revision)
   }
 
   async pull(number: number): Promise<PullState> {
@@ -153,6 +165,19 @@ describe('pull request delivery', () => {
     expect(conflict.status === 'blocked' && conflict.reason).toContain('changed')
     expect(changed.pushes).toEqual([])
     expect(changed.creates).toEqual([])
+  })
+
+  it('publishes again a branch that already carries the result, and finds the pull request on the server', async () => {
+    const port = new FakePort()
+    port.heads.set('agent/T-1', 'commit-published')
+    port.trees.set('commit-published', 'tree-result')
+    port.trees.set('commit-result', 'tree-result')
+    port.pulls.set(9, { state: 'open', draft: true, autoMerge: false, head: 'agent/T-1', base: 'main', url: 'https://example.test/pull/9' })
+    const result = await deliver(request(), port)
+    // The branch head is the delivery's own earlier publication, so it is not a change somebody else made.
+    expect(result.status).toBe('delivered')
+    expect(port.creates).toEqual([])
+    expect(port.updates.map(update => update.number)).toEqual([9])
   })
 
   it('blocks an auto-merge-enabled pull request instead of disabling it', async () => {

@@ -56,6 +56,8 @@ class FakeGitHub implements PullPort {
     return { state: 'open', draft: false, autoMerge: false, head: 'agent/ticket-1', base: 'main', url: `https://example.test/pull/${number}` }
   }
   async branchProtection(): Promise<{ required: boolean; forbidsMerge: boolean }> { return { required: true, forbidsMerge: true } }
+  async pullForBranch(): Promise<number | undefined> { return undefined }
+  async treeOf(): Promise<string | undefined> { return undefined }
 }
 
 describe('the publication decision', () => {

@@ -66,6 +66,10 @@ export interface PullPort {
   pushRef(branch: string, commit: string, expectedOldSha: string): Promise<{ ok: boolean; reason?: string }>
   /** Reads the current state of a pull request. */
   pull(number: number): Promise<PullState>
+  /** The open pull request that publishes a branch, when there is one. */
+  pullForBranch(branch: string): Promise<number | undefined>
+  /** The tree of a revision, so a branch that already carries a result can be recognized. */
+  treeOf(revision: string): Promise<string | undefined>
   /** Reads the server-enforced protection of a branch. */
   branchProtection(branch: string): Promise<BranchProtection>
 }
@@ -272,7 +276,7 @@ export const deliver = async (
     }
   }
 
-  const known = request.pullNumber ?? ledger?.find(request.segmentId)
+  const known = request.pullNumber ?? ledger?.find(request.segmentId) ?? await port.pullForBranch(request.branch)
   let state: PullState | undefined
   if (known !== undefined) {
     try {
@@ -306,7 +310,13 @@ export const deliver = async (
   } catch (error) {
     return unknown('branchHead', error)
   }
-  if (head !== undefined && head !== request.commit && head !== request.expectedOldSha) {
+  // The branch may already carry this result: a delivery that ran before published it and read its outcome back.
+  // Such a head is the delivery's own publication, not a change somebody else made.
+  const headTree = head === undefined ? undefined : await port.treeOf(head)
+  const commitTree = await port.treeOf(request.commit)
+  const published = head === undefined || head === request.commit || head === request.expectedOldSha
+    || (headTree !== undefined && commitTree !== undefined && headTree === commitTree)
+  if (head !== undefined && !published) {
     return {
       status: 'blocked',
       reason: `the branch head ${head} changed since the segment started; the delivery never overwrites it`,
@@ -316,7 +326,8 @@ export const deliver = async (
   if (head !== request.commit) {
     let pushed: { ok: boolean; reason?: string }
     try {
-      pushed = await port.pushRef(request.branch, request.commit, request.expectedOldSha)
+      // The lease names the head the delivery verified, so a change between the check and the push is still refused.
+      pushed = await port.pushRef(request.branch, request.commit, head ?? request.expectedOldSha)
     } catch (error) {
       return unknown('pushRef', error)
     }
