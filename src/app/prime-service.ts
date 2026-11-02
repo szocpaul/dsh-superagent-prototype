@@ -744,7 +744,7 @@ export async function findGateApproval(deps: PrimeServiceDeps, ticketId: string,
         commitSha: command[5]!,
         editorLogin: verified.author.login,
         policyVersion: policyVersion(deps.settings()),
-      })
+      }, deps.store.bridge.approvals)
     } catch (error) {
       void error
     }

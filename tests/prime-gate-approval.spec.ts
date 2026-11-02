@@ -116,6 +116,23 @@ describe('the gate decision', () => {
     expect(record.actor.login).toBe('octocat')
   })
 
+  it('records the decision so the continuation past the gate finds it', async () => {
+    const saved: ApprovalRecord[] = []
+    const store = {
+      save: (record: ApprovalRecord) => { saved.push(record) },
+      get: (id: string) => saved.find(item => item.approvalId === id),
+      byTicket: (ticketId: string) => saved.filter(item => item.ticketId === ticketId),
+    }
+    const record = await verifyGateDecision(source(), request(), store)
+    expect(saved).toHaveLength(1)
+    expect(saved[0]!.gateCommit).toBe(SHA)
+    expect(saved[0]!.gateId).toBe('T031')
+    // A repeated poll answers with the record it already made, so the gate is not recorded twice.
+    const again = await verifyGateDecision(source(), request(), store)
+    expect(again.approvalId).toBe(record.approvalId)
+    expect(saved).toHaveLength(1)
+  })
+
   it('refuses a denied, unrelated, stale or edited decision', async () => {
     const denied = source({ comments: { 'comment-9': evidence({ commentBody: `@dsh-agent DENY GATE T031 ${DIGEST} ${SHA}` }) } })
     await expect(verifyGateDecision(denied, request())).rejects.toThrow(ApprovalError)

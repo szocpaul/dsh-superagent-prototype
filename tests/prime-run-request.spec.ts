@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { cpSync, mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { findRunApproval, manifestKey, requestRun } from '../src/app/prime-service.ts'
+import { findGateApproval, findRunApproval, manifestKey, requestRun } from '../src/app/prime-service.ts'
 import { Store } from '../src/app/store.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import type { Ticket, Trigger } from '../src/core/index.ts'
@@ -39,12 +39,14 @@ function comments(digest: string): unknown[] {
 }
 
 /** The service dependencies of the run request, with a fake GitHub and a real store. */
-function dependencies(root: string, store: Store, rows: unknown[], repository: { id: number }) {
+function dependencies(root: string, store: Store, rows: unknown[], repository: { id: number }, commit?: unknown) {
   const settings = SettingsSchema.parse({ policy: { sources: { github: { allowed: [{ id: 'human' }] } } } })
   const commands = {
     git: async (args: string[], cwd: string) => execFileSync('git', args, { cwd, encoding: 'utf8' }),
     api: async (_schema: unknown, path: string) => {
       if (path === '') return { id: repository.id, name: 'example/fixture' }
+      // The gate commit is read from the repository under its own path.
+      if (/^commits\/[0-9a-f]{40}$/.test(path)) return commit
       // GitHub serves one issue comment under issues/comments/<id>; any other route is a 404.
       const comment = /^issues\/comments\/(\d+)$/.exec(path)
       if (!comment) throw new Error(`404 Not Found (${path})`)
@@ -90,6 +92,20 @@ function ticketAndTrigger(store: Store): void {
   store.tickets.save(ticket)
 }
 
+/** The gate decision comment and the gate commit it names, as GitHub serves them. */
+function gateDecision(digest: string, sha: string, line: string): { rows: unknown[]; commit: unknown } {
+  const rows = [{ id: 201, body: `@agent APPROVE GATE T003 ${digest} ${sha}`, user: { login: 'human', id: 7, type: 'User' } }]
+  const commit = {
+    sha,
+    parents: [{ sha: 'd'.repeat(40) }],
+    author: { login: 'human', id: 7, type: 'User' },
+    committer: { login: 'web-flow' },
+    commit: { verification: { verified: true, reason: 'valid' } },
+    files: [{ filename: 'specs/002-smoke-fixture/tasks.md', patch: `@@ -16,7 +16,7 @@\n-- [ ] ${line}\n+- [x] ${line}\n` }],
+  }
+  return { rows, commit }
+}
+
 describe('the run request of a Prime run', () => {
   it('names the repository GitHub reports, so the manifest can be built and approved', async () => {
     const root = fixtureRepository()
@@ -131,6 +147,38 @@ describe('the run request of a Prime run', () => {
       repository.id = REPOSITORY_ID + 1
       const other = dependencies(root, store, comments(digest), repository)
       expect(await findRunApproval(other, 'ticket-1', digest)).toBeUndefined()
+    } finally {
+      store.close()
+    }
+  })
+})
+
+describe('the gate decision of a Prime run', () => {
+  it('records the verified gate decision, so the continuation past the gate finds it', async () => {
+    const root = fixtureRepository()
+    const store = new Store(join(mkdtempSync(join(tmpdir(), 'prime-run-store-')), 'db.sqlite'))
+    try {
+      ticketAndTrigger(store)
+      const repository = { id: REPOSITORY_ID }
+      const first = dependencies(root, store, [], repository)
+      const { manifest, digest } = await requestRun(first, 'ticket-1', 'specs/002-smoke-fixture')
+      store.set(manifestKey('ticket-1'), manifest as unknown as ApprovedManifest)
+      const gate = manifest.tasks.find(task => task.id === 'T003')!
+      const line = `${gate.id} ${gate.text}`
+      const sha = 'e'.repeat(40)
+      const { rows, commit } = gateDecision(digest, sha, line)
+      const deps = dependencies(root, store, rows, repository, commit)
+      const record = await findGateApproval(deps, 'ticket-1', 'T003', digest, { taskLine: line, parent: 'd'.repeat(40) })
+      expect(record?.decision).toBe('approved')
+      expect(record?.gateCommit).toBe(sha)
+      // The decision is recorded, so the continuation past the gate finds it bound to the gate.
+      const recorded = store.bridge.approvals.byTicket('ticket-1')
+      expect(recorded).toHaveLength(1)
+      expect(recorded[0]!.gateId).toBe('T003')
+      // The poll that follows the same decision answers with it instead of recording it again.
+      const again = await findGateApproval(deps, 'ticket-1', 'T003', digest, { taskLine: line, parent: 'd'.repeat(40) })
+      expect(again?.approvalId).toBe(record?.approvalId)
+      expect(store.bridge.approvals.byTicket('ticket-1')).toHaveLength(1)
     } finally {
       store.close()
     }
