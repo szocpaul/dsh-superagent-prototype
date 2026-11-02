@@ -28,6 +28,17 @@ it('reads the state of an existing pull request, including the auto-merge reques
   expect(await pullPort(cli, '/tmp').pull(7)).toEqual({ state: 'open', draft: true, autoMerge: false, head: 'agent/x', base: 'main', url: 'u' })
 })
 
+it('reads the branch head from the server, so a branch that does not exist yet has no moved head', async () => {
+  const cli = commands()
+  const run = vi.spyOn(cli, 'run')
+  run.mockResolvedValueOnce(JSON.stringify({ object: { sha: 'a'.repeat(40) } }))
+  expect(await pullPort(cli, '/tmp').branchHead('agent/x')).toBe('a'.repeat(40))
+  expect(run).toHaveBeenCalledWith('/bin/false', ['api', 'repos/acme/widgets/git/ref/heads/agent%2Fx'])
+  // A branch the server does not know has no head at all.
+  run.mockRejectedValueOnce(new Error('404 Not Found'))
+  expect(await pullPort(cli, '/tmp').branchHead('agent/y')).toBeUndefined()
+})
+
 it('reports an auto-merge request that the server named', async () => {
   const cli = commands()
   vi.spyOn(cli, 'run').mockResolvedValue(JSON.stringify({ state: 'open', draft: false, auto_merge: { enabled_by: { login: 'someone' } }, head: { ref: 'agent/x' }, base: { ref: 'main' } }))

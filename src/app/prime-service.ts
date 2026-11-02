@@ -26,7 +26,7 @@ import { preflight, type PreflightHost } from '../executor/prime-preflight.ts'
 import { approvalEvidence, approvalIsCurrent, approveRun, denyRun, verifyGateCommit, verifyGateDecision, type AccountType,
   type ApprovalEvidence, type ApprovalSource } from './prime-approval.ts'
 import { checkoutRunBranch } from './prime-verification.ts'
-import { readCommit } from '../sources/github-read.ts'
+import { readBranchHead, readCommit } from '../sources/github-read.ts'
 import { policyVersion } from '../policy.ts'
 import { z } from 'zod'
 import { PrimeBridge, type ApprovalPort, type BridgeHost, type DeliveryOutcome, type DeliveryPort, type PreflightOutcome,
@@ -429,7 +429,9 @@ export function pullPort(commands: Commands, root: string): PullPort {
   const api = async <T>(path: string, ...flags: string[]): Promise<T> => JSON.parse(await commands.api(path, ...flags)) as T
   return {
     async branchHead(branch: string): Promise<string | undefined> {
-      try { return (await commands.git(['rev-parse', `refs/heads/${branch}`], root)).trim() } catch { return undefined }
+      // The head that matters is the one on the server: the local branch may sit on a revision the server never saw,
+      // and a branch the server does not know yet has no head that could have moved.
+      try { return await readBranchHead(commands, branch) } catch { return undefined }
     },
     async createPull(input: CreatePullInput): Promise<PullRef> {
       // Every field of the request is its own argument: the CLI sends the fields as they are, and a JSON body in one
