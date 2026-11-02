@@ -52,6 +52,9 @@ import { PrimeSupervisor } from '../executor/prime-supervisor.ts'
 import { localIsolationRunner } from '../infra/prime-isolation.ts'
 import type { ApprovedManifest } from '../executor/prime-model.ts'
 import { readRunnerReport, verifySegment } from './prime-verification.ts'
+import type { AssessHost } from '../executor/prime-verify.ts'
+import { bytesDigest } from '../executor/prime-manifest.ts'
+import { existsSync, readFileSync } from 'node:fs'
 import { manifestDigest } from '../executor/prime-manifest.ts'
 import { allowlistOf, createPrimeBridge, deliveryAdapter, hostPreflightHost, hostRunEnvironment, manifestKey,
   quotaAdapter, requestRun, runnerAdapter, type PrimeServiceDeps } from './prime-service.ts'
@@ -284,8 +287,46 @@ export class Runtime extends Service implements SourceHost {
           segment,
           report,
           storage: workspace,
+          assessHost: this.assessmentHost(),
         })
         return { runner: report, verification }
+      },
+    }
+  }
+  /**
+   * The controller's own convergence assessment of a segment.
+   *
+   * The assessment reads the result of the run and reports what it finds as proposals: a task the run did not report
+   * as completed, and a file whose content the run described differently. It never changes the approved scope and it
+   * never adds a task.
+   */
+  private assessmentHost(): AssessHost {
+    const runtime = this
+    return {
+      async assessOnScratch(request) {
+        const findings: { id: string; summary: string }[] = []
+        const root = runtime.repositoryRoot()
+        const report = readRunnerReport(request.workspace, {
+          segmentId: request.segmentId ?? '',
+          generation: request.generation ?? 0,
+          stopEpoch: request.stopEpoch ?? 0,
+          manifestSha256: request.manifestSha256,
+        })
+        for (const id of request.taskIds) {
+          if (report.completedTaskIds.includes(id)) continue
+          findings.push({ id: `task-${id}`, summary: `the run did not report the task ${id} as completed` })
+        }
+        for (const file of report.files) {
+          const full = join(root, file.path)
+          if (!existsSync(full)) {
+            findings.push({ id: `file-${file.path}`, summary: `the report names the file ${file.path}, which the workspace does not hold` })
+            continue
+          }
+          if (bytesDigest(readFileSync(full)) !== file.sha256) {
+            findings.push({ id: `file-${file.path}`, summary: `the report does not describe the current content of ${file.path}` })
+          }
+        }
+        return { findings }
       },
     }
   }

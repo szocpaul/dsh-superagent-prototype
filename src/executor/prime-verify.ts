@@ -85,6 +85,12 @@ export interface AssessRequest {
   round: number
   /** The manifest the assessment compares the implementation against. */
   manifestSha256: string
+  /** The segment the assessment belongs to. */
+  segmentId?: string
+  /** The generation of the segment. */
+  generation?: number
+  /** The stop epoch of the segment. */
+  stopEpoch?: number
   /** The tasks the assessment covers. */
   taskIds: string[]
   /** The tasks the assessment does not cover, because a person has to act first. */
@@ -275,6 +281,9 @@ export async function assess(
     scope: atGate ? 'segment' : 'full',
     round,
     manifestSha256: manifestDigest(manifest),
+    segmentId: segment.segmentId,
+    generation: segment.generation,
+    stopEpoch: segment.stopEpoch,
     taskIds: assessedTaskIds,
     notAssessedTaskIds,
     workspace: segment.runner.workspace,

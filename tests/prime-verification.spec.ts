@@ -97,6 +97,26 @@ describe('the host verification', () => {
     }
   })
 
+  it('gives the check the dependencies of the project, so it can run against the exact revision', async () => {
+    const root = await gitRoot()
+    try {
+      mkdirSync(join(root, 'node_modules'), { recursive: true })
+      writeFileSync(join(root, 'node_modules', 'marker.txt'), 'the dependency\n')
+      await exec('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'base'], { cwd: root })
+      const revision = (await exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim()
+      const verifier = verifierPort(gitCommands(root), root)
+      const outcome = await verifier.run(
+        { name: 'read', argv: ['sh', '-c', 'cat node_modules/marker.txt'], cwd: '.', timeoutMs: 60_000 },
+        revision,
+        verifierEnvironment(root),
+      )
+      expect(outcome.exitCode).toBe(0)
+      expect(outcome.evidence).toContain('the dependency')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60_000)
+
   it('hands no credential to the verifier', () => {
     const environment = verifierEnvironment('/tmp/workspace')
     expect(environment.GH_TOKEN).toBeUndefined()

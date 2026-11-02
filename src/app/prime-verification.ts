@@ -8,7 +8,7 @@
  * default but leaves the bridge unusable.
  */
 import { execFile } from 'node:child_process'
-import { mkdirSync, mkdtempSync, existsSync, readFileSync, symlinkSync, writeFileSync, rmSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
@@ -79,10 +79,11 @@ export function verifierPort(commands: Commands, root: string): VerifierPort {
         await git(['checkout', '--quiet', 'FETCH_HEAD'], scratch)
         const cwd = join(scratch, check.cwd || '.')
         mkdirSync(cwd, { recursive: true })
-        // The check needs the project's own dependencies, and a fresh checkout has none: the verifier borrows them
-        // read-only from the repository it checks out, so the check runs against the exact revision.
+        // The check needs the project's own dependencies, and a fresh checkout has none: the verifier copies them from
+        // the repository it checks out. A link is not enough: the package manager checks the state of the tree it
+        // finds and refuses a linked one.
         const dependencies = join(root, 'node_modules')
-        if (existsSync(dependencies)) symlinkSync(dependencies, join(scratch, 'node_modules'), 'dir')
+        if (existsSync(dependencies)) cpSync(dependencies, join(scratch, 'node_modules'), { recursive: true, verbatimSymlinks: true })
         // The checkout holds no credential helper, so a check cannot reach GitHub even if it tried.
         await git(['config', '--local', '--unset-all', 'credential.helper'], scratch).catch(() => undefined)
         const [program, ...args] = check.argv
