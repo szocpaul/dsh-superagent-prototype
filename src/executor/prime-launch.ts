@@ -89,7 +89,16 @@ function gateArgument(check: ApprovedCheck): string {
  */
 export function buildLaunchInvocation(
   manifest: ApprovedManifest,
-  options: { taskIds: readonly string[]; nextGateId?: string; barrier: BootstrapBarrier; reportPath: string; limits?: Partial<LaunchLimits> },
+  options: {
+    taskIds: readonly string[]
+    nextGateId?: string
+    barrier: BootstrapBarrier
+    reportPath: string
+    markdownPath: string
+    sessionDir: string
+    bindings: ReportBindings
+    limits?: Partial<LaunchLimits>
+  },
 ): LaunchInvocation {
   const limits = { ...DEFAULT_LIMITS, ...options.limits }
   const goal = segmentGoal(manifest, options.taskIds, options.nextGateId)
@@ -98,7 +107,9 @@ export function buildLaunchInvocation(
     taskIds: options.taskIds,
     nextGateId: options.nextGateId,
     reportPath: options.reportPath,
+    markdownPath: options.markdownPath,
     barrierPath: options.barrier.path,
+    bindings: options.bindings,
   })
   const argv = [
     manifest.environment.runner.cli,
@@ -112,6 +123,8 @@ export function buildLaunchInvocation(
     '--autonomous-max-tokens', String(limits.maxTokens),
     '--autonomous-timeout-ms', String(limits.maxWallMs),
     '--goal', goal,
+    // The session of the run lives in the run's own storage, so the controller and the quota guard can read it.
+    '--session-dir', options.sessionDir,
   ]
   for (const check of manifest.checks) argv.push('--autonomous-gate', gateArgument(check))
   // The prompt tells the runner which specification to read, where its report belongs, and that it waits for the
@@ -131,7 +144,9 @@ export function segmentPrompt(options: {
   taskIds: readonly string[]
   nextGateId?: string
   reportPath: string
+  markdownPath: string
   barrierPath: string
+  bindings: ReportBindings
 }): string {
   const range = options.taskIds.length
     ? `Execute the tasks ${options.taskIds[0]} through ${options.taskIds[options.taskIds.length - 1]} of ${options.featureDir}/tasks.md`
@@ -149,6 +164,34 @@ export function segmentPrompt(options: {
     '- "When waiting on a slow process, await its handle/completion follow-up; never poll in consecutive turns, and if an explicit check is unavoidable, check at most once per 10 minutes."',
     `- Wait for the barrier file ${options.barrierPath} before you begin any work. It appears when the controller has recorded the run's identity and its quota guard.`,
     stop,
-    `Write your durable report to ${options.reportPath} before you send any message.`,
+    `Write your durable report to ${options.reportPath} before you send any message, and the human-readable copy to ${options.markdownPath}.`,
+    'The report is one JSON object with exactly these keys: schemaVersion, ticketId, assignmentId, segmentId,',
+    'generation, stopEpoch, manifestSha256, baselineRevision, outcome, files, completedTaskIds,',
+    'remainingTaskIds, nextGateId, checks, convergence, summary, risksAndBlockers.',
+    `Use exactly these values: ${Object.entries(options.bindings).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(', ')}.`,
+    'files lists the files you changed: [{"path": "<the path relative to the workspace>", "sha256": "<the SHA-256 of the file>"}].',
+    'Compute the digest of each file with "sha256sum <path>" and name no file you did not change.',
+    'checks lists the checks you ran: [{"name": "<the name of the approved check>", "exitCode": <the exit code>, "evidence": "<a path relative to the run storage>"}].',
+    'convergence is {"rounds": 1, "status": "<converged|deferred-at-gate>"}.',
   ].join('\n')
+}
+
+/** The values the runner's report must carry, so the controller can bind it to the segment it expects. */
+export interface ReportBindings {
+  /** The Ticket the run belongs to. */
+  ticketId: string
+  /** The assignment the run belongs to. */
+  assignmentId: string
+  /** The segment the run belongs to. */
+  segmentId: string
+  /** The generation of the segment. */
+  generation: number
+  /** The stop epoch of the segment. */
+  stopEpoch: number
+  /** The digest of the approved manifest. */
+  manifestSha256: string
+  /** The commit the run started from. */
+  baselineRevision: string
+  /** The outcome of the segment: `gate` when the run stopped at a human gate. */
+  outcome: 'gate' | 'complete' | 'blocked' | 'failed'
 }

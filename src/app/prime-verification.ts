@@ -8,7 +8,7 @@
  * default but leaves the bridge unusable.
  */
 import { execFile } from 'node:child_process'
-import { mkdirSync, mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, existsSync, readFileSync, symlinkSync, writeFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
@@ -49,9 +49,14 @@ export function revisionPort(commands: Commands, root: string): RevisionPort {
         writeFileSync(target, file.content)
       }
       const git = async (args: string[]) => (await commands.git(args, root)).trim()
+      // The branch the checkout is on keeps no trace of the run's result: the commit is created, published under its
+      // own name, and the branch returns to the baseline with the files in the working tree.
+      const parent = await git(['rev-parse', 'HEAD']).catch(() => undefined)
       await git(['add', '--', ...input.files.map(file => file.path)])
       await git(['-c', 'user.name=dsh-superagent', '-c', `user.email=${process.env.DSH_PRIME_COMMIT_EMAIL ?? 'dsh-superagent@users.noreply.github.com'}`, 'commit', '--no-verify', '-m', input.message])
-      return git(['rev-parse', 'HEAD'])
+      const commit = await git(['rev-parse', 'HEAD'])
+      if (parent) await git(['reset', '--mixed', parent])
+      return commit
     },
   }
 }
@@ -74,6 +79,10 @@ export function verifierPort(commands: Commands, root: string): VerifierPort {
         await git(['checkout', '--quiet', 'FETCH_HEAD'], scratch)
         const cwd = join(scratch, check.cwd || '.')
         mkdirSync(cwd, { recursive: true })
+        // The check needs the project's own dependencies, and a fresh checkout has none: the verifier borrows them
+        // read-only from the repository it checks out, so the check runs against the exact revision.
+        const dependencies = join(root, 'node_modules')
+        if (existsSync(dependencies)) symlinkSync(dependencies, join(scratch, 'node_modules'), 'dir')
         // The checkout holds no credential helper, so a check cannot reach GitHub even if it tried.
         await git(['config', '--local', '--unset-all', 'credential.helper'], scratch).catch(() => undefined)
         const [program, ...args] = check.argv
@@ -119,7 +128,7 @@ export async function verifySegment(options: {
   assessHost?: AssessHost
 }): Promise<Awaited<ReturnType<typeof verify>>> {
   const { commands, root, manifest, segment, report, workspace, assessHost } = options
-  const snapshot = await collectSnapshot(workspace, manifest.allowedPaths)
+  const snapshot = await collectSnapshot(commands, workspace, manifest.allowedPaths)
   const committer = revisionPort(commands, root)
   const verifier = verifierPort(commands, root)
   const environment = verifierEnvironment(workspace)
@@ -127,7 +136,7 @@ export async function verifySegment(options: {
   const checks = await rerunChecks(manifest.checks, resultRevision, verifier, environment)
   const assessment = assessHost ? await assess(manifest, segment, 1, assessHost) : undefined
   return verify({
-    manifest, segment, report, workspace, verifier, environment,
+    manifest, segment, report, workspace, commands, verifier, environment,
     committer,
     assessment,
   })

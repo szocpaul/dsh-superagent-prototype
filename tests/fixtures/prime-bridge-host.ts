@@ -33,7 +33,7 @@ export const manifest = (): ApprovedManifest => ({
 export const runnerReport = (): RunnerReport => ({
   schemaVersion: 1, ticketId: 'ticket-1', assignmentId: 'assignment-1', segmentId: 'segment-1', generation: 1,
   stopEpoch: 0, manifestSha256: 'a'.repeat(64), baselineRevision: 'c'.repeat(40), outcome: 'complete',
-  workspaceSnapshotSha256: 'd'.repeat(64), completedTaskIds: ['T001'], remainingTaskIds: [], nextGateId: null,
+  files: [], completedTaskIds: ['T001'], remainingTaskIds: [], nextGateId: null,
   checks: [{ name: 'typecheck', exitCode: 0, evidence: 'evidence/typecheck.log' }],
   convergence: { rounds: 1, status: 'converged' }, summary: 'the segment is done', risksAndBlockers: [],
 })

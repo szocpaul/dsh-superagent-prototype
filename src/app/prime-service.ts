@@ -17,6 +17,7 @@ import { deliver as deliverPull, type BranchProtection, type CreatePullInput, ty
   type PullRef, type PullState, type UpdatePullInput } from '../executor/prime-delivery.ts'
 import { QuotaMonitor, type GuardIdentity } from '../executor/prime-quota.ts'
 import { buildManifest, manifestDigest, type ManifestSource } from '../executor/prime-manifest.ts'
+import { REPORT_FILE, REPORT_MARKDOWN_FILE } from '../executor/prime-report.ts'
 import { buildLaunchInvocation, AUTONOMOUS_FLAGS } from '../executor/prime-launch.ts'
 import { preflight, type PreflightHost } from '../executor/prime-preflight.ts'
 import { approvalEvidence, approvalIsCurrent, approveRun, denyRun, verifyGateCommit, verifyGateDecision, type AccountType,
@@ -273,7 +274,19 @@ export function runnerAdapter(supervisor: PrimeSupervisor, deps: PrimeServiceDep
         taskIds: segment.taskIds,
         nextGateId: segment.nextGateId ?? undefined,
         barrier: { path: barrierPath, release: `${segment.segmentId}:${segment.generation}` },
-        reportPath: join(segment.runner.workspace, 'runner-report.md'),
+        reportPath: join(segment.runner.workspace, REPORT_FILE),
+        markdownPath: join(segment.runner.workspace, REPORT_MARKDOWN_FILE),
+        sessionDir: join(segment.runner.workspace, 'session'),
+        bindings: {
+          ticketId: segment.ticketId,
+          assignmentId: segment.assignmentId,
+          segmentId: segment.segmentId,
+          generation: segment.generation,
+          stopEpoch: segment.stopEpoch,
+          manifestSha256: manifestDigest(manifest),
+          baselineRevision: manifest.baselineCommit,
+          outcome: segment.nextGateId ? 'gate' : 'complete',
+        },
       })
       const plan = isolationPlan(manifest, deps.repositoryRoot(), {
         argv: invocation.argv,
@@ -381,7 +394,7 @@ export function quotaAdapter(deps: PrimeServiceDeps): QuotaPort {
     if (existing) return existing
     const identity: GuardIdentity = {
       entryName: segment.quotaGuardId,
-      sessionFile: segment.runner.sessionFile ?? join(segment.runner.workspace, 'session.json'),
+      sessionFile: segment.runner.sessionFile ?? join(segment.runner.workspace, 'session'),
       logPath: join(segment.runner.workspace, 'quota.log'),
       alertFile: join(segment.runner.workspace, 'quota-alert.jsonl'),
       cgroup: segment.runner.cgroup,

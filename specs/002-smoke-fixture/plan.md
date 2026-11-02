@@ -11,6 +11,7 @@ Create one exported function and the check that verifies it. Nothing else change
 **Language/Version**: TypeScript with the repository's own toolchain
 **Primary Dependencies**: the repository's existing test runner
 **Storage**: none beyond the two files
+**Baseline**: the two files exist with the repository's reference implementation; the run changes them, and the writable scope has to name files that exist, because the confinement binds exactly those paths
 **Testing**: `pnpm exec vitest run tests/smoke.spec.ts`
 **Target Platform**: the repository's own environment
 **Project Type**: library
@@ -42,8 +43,8 @@ specs/002-smoke-fixture/
 ### Source Code (repository root)
 
 ```text
-src/smoke.ts          # the exported behaviour
-tests/smoke.spec.ts   # the check
+src/smoke.ts          # the exported behaviour the run completes
+tests/smoke.spec.ts   # the check the run completes
 ```
 
 **Structure Decision**: The fixture lives beside the repository's own sources, so

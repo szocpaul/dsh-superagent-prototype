@@ -14,8 +14,8 @@
 
 **Purpose**: The approved scope and the check that verify it.
 
-- [ ] T001 [P] Create `src/smoke.ts` with the exported function
-- [ ] T002 Create `tests/smoke.spec.ts` with the check
+- [ ] T001 [P] Complete `src/smoke.ts` with the exported function and the `SMOKE_VERSION` constant
+- [ ] T002 Complete `tests/smoke.spec.ts` with the check
 - [ ] T003 MANUAL GATE - Review the fixture change and record the decision
 - [ ] T004 [P] Run `pnpm exec vitest run tests/smoke.spec.ts` and record the result
 

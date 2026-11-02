@@ -96,7 +96,11 @@ never create another runner merely because the first CLI call failed or returned
 
 **Completion**: write `runner-report.md` plus a schema-validated structured report
 atomically under run-owned storage, recording the workspace state the runner produced
-without a result revision. A run-specific local wake signal is only a hint;
+without a result revision. The report names the files the runner changed and the
+SHA-256 of each of them; the controller derives the same list from the workspace's
+own version control and compares every path and every digest, so the report is
+bound to the exact workspace the controller sees. The runner never computes a digest
+over the whole workspace, because that algorithm belongs to the controller. A run-specific local wake signal is only a hint;
 startup and low-frequency non-LLM reconciliation cover lost signals. It carries no
 credentials and cannot authorize work. On completion, prove the service/cgroup is
 quiescent; otherwise retain the slot and guard. Validate segment/generation/epoch,
@@ -108,6 +112,11 @@ independently against the exact candidate revision in a separate confined verifi
 with no GitHub, controller or model credentials; verify no mutation during
 verification, and inspect PR/head and approval before delivery. Logs are sanitized
 and never treated as proof that secret values cannot leak.
+
+**Scope**: the approved scope is enforced by the confinement, not only instructed:
+the checkout is bound read-only and only the approved paths are writable, so the
+controller derives the changed files from the workspace's own version control and
+treats every change outside the approved paths as a blocked run.
 
 **Stop**: record stop intent and increment epoch transactionally with Ticket ending,
 then enqueue durable stop. Stop the exact private daemon/service, cancel the Prime

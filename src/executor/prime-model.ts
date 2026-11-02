@@ -177,7 +177,7 @@ export interface RunnerReport {
   manifestSha256: string
   baselineRevision: string
   outcome: 'gate' | 'complete' | 'blocked' | 'failed'
-  workspaceSnapshotSha256: string
+  files: { path: string; sha256: string }[]
   completedTaskIds: string[]
   remainingTaskIds: string[]
   nextGateId: string | null

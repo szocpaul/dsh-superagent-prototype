@@ -112,7 +112,10 @@ const ReportSchema = z.object({
   manifestSha256: z.string().regex(HEX64, 'a manifest digest is 64 lowercase hex characters'),
   baselineRevision: z.string().min(1),
   outcome: z.enum(['gate', 'complete', 'blocked', 'failed']),
-  workspaceSnapshotSha256: z.string().regex(HEX64, 'a workspace snapshot digest is 64 lowercase hex characters'),
+  files: z.array(z.object({
+    path: z.string().min(1),
+    sha256: z.string().regex(HEX64, 'a file digest is 64 lowercase hex characters'),
+  }).strict()),
   completedTaskIds: z.array(z.string().min(1)),
   remainingTaskIds: z.array(z.string().min(1)),
   nextGateId: z.string().min(1).nullable(),

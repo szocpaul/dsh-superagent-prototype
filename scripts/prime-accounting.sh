@@ -1,26 +1,38 @@
 #!/bin/sh
 # prime-accounting.sh - the accounting command of the Prime Runner Bridge quota guard.
 #
-# Usage: prime-accounting.sh <session.jsonl>
+# Usage: prime-accounting.sh <session.jsonl|session-directory>
 #
 # Prints two lines the guard parses:
 #   tokens=N   the billed tokens of the session inside the trailing five hours
 #   scope=session
 #
-# The scope is stated honestly: it counts one session file. It is not an
-# account-wide quota, and the guard's own output says so. The command reads no
-# credential and prints none.
+# The scope is stated honestly: it counts one session, or the session files of
+# one run. It is not an account-wide quota, and the guard's own output says so.
+# The command reads no credential and prints none.
 set -u
 SESSION="${1:-}"
 [ -n "$SESSION" ] || { printf 'prime-accounting: a session file is required\n' >&2; exit 1; }
 [ -r "$SESSION" ] || { printf 'prime-accounting: the session file cannot be read\n' >&2; exit 1; }
 python3 - "$SESSION" <<'PY'
-import json, sys, time
+import json, os, sys, time
 from datetime import datetime
+
 cut = time.time() - 5 * 3600
 total = 0
-try:
-    with open(sys.argv[1], errors='ignore') as handle:
+path = sys.argv[1]
+if os.path.isdir(path):
+    files = [os.path.join(path, name) for name in sorted(os.listdir(path)) if name.endswith('.jsonl')]
+    if not files:
+        print('prime-accounting: the session directory holds no session file', file=sys.stderr)
+        sys.exit(1)
+else:
+    files = [path]
+
+
+def tokens_of(session):
+    counted = 0
+    with open(session, errors='ignore') as handle:
         for line in handle:
             try:
                 record = json.loads(line)
@@ -42,8 +54,14 @@ try:
                 continue
             if stamp < cut:
                 continue
-            total += (usage.get('input', 0) + usage.get('cacheRead', 0)
-                      + usage.get('cacheWrite', 0) + usage.get('output', 0))
+            counted += (usage.get('input', 0) + usage.get('cacheRead', 0)
+                        + usage.get('cacheWrite', 0) + usage.get('output', 0))
+    return counted
+
+
+try:
+    for session in files:
+        total += tokens_of(session)
 except OSError:
     print('prime-accounting: the session file cannot be read', file=sys.stderr)
     sys.exit(1)

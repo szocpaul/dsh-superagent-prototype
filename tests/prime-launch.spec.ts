@@ -15,13 +15,27 @@ const manifest = {
   checks: [{ name: 'focused', argv: ['pnpm', 'exec', 'vitest', 'run', 'tests/prime-*.spec.ts'], cwd: '.', timeoutMs: 60_000 }],
 } as unknown as ApprovedManifest
 
+const bindings = {
+  ticketId: 'ticket-1',
+  assignmentId: 'assignment-1',
+  segmentId: 'segment-1',
+  generation: 1,
+  stopEpoch: 0,
+  manifestSha256: 'a'.repeat(64),
+  baselineRevision: 'b'.repeat(40),
+  outcome: 'gate' as const,
+}
+
 describe('the bounded autonomous invocation', () => {
   it('builds the vector from the approved manifest, not from free text', () => {
     const invocation = buildLaunchInvocation(manifest, {
       taskIds: ['T010', 'T011'],
       nextGateId: 'T012',
       barrier: { path: '/tmp/barrier', release: 'seg:1' },
-      reportPath: '/tmp/runner-report.md',
+      reportPath: '/tmp/runner-report.json',
+      markdownPath: '/tmp/runner-report.md',
+      sessionDir: '/tmp/session',
+      bindings,
     })
     expect(invocation.argv[0]).toBe('prime-agent')
     expect(invocation.argv).toContain('--autonomous')
@@ -33,7 +47,7 @@ describe('the bounded autonomous invocation', () => {
   })
 
   it('names the approved model, so the run uses the model the operator approved', () => {
-    const invocation = buildLaunchInvocation(manifest, { taskIds: ['T010'], barrier: { path: '/b', release: 'r' }, reportPath: '/tmp/runner-report.md' })
+    const invocation = buildLaunchInvocation(manifest, { taskIds: ['T010'], barrier: { path: '/b', release: 'r' }, reportPath: '/tmp/runner-report.json', markdownPath: '/tmp/runner-report.md', sessionDir: '/tmp/session', bindings })
     expect(invocation.argv[invocation.argv.indexOf('--provider') + 1]).toBe('minimax')
     expect(invocation.argv[invocation.argv.indexOf('--model') + 1]).toBe('MiniMax-M3.1-Flash')
   })
@@ -56,6 +70,21 @@ describe('the bounded autonomous invocation', () => {
     }
   })
 
+  it('tells the runner exactly what its report has to carry', () => {
+    const prompt = segmentPrompt({
+      featureDir: 'specs/002-smoke-fixture', taskIds: ['T001'], nextGateId: 'T003',
+      reportPath: '/tmp/runner-report.json', markdownPath: '/tmp/runner-report.md',
+      barrierPath: '/tmp/barrier', bindings,
+    })
+    expect(prompt).toContain('ticketId')
+    expect(prompt).toContain('segmentId')
+    expect(prompt).toContain('manifestSha256')
+    expect(prompt).toContain('segmentId="segment-1"')
+    expect(prompt).toContain('files')
+    expect(prompt).toContain('sha256sum')
+    expect(prompt).toContain('/tmp/runner-report.json')
+  })
+
   it('bounds the goal to the approved task range and the human gate', () => {
     const goal = segmentGoal(manifest, ['T010', 'T011'], 'T012')
     expect(goal).toContain('T010')
@@ -69,7 +98,7 @@ describe('the bounded autonomous invocation', () => {
   })
 
   it('uses the default limits when the manifest approves none', () => {
-    const invocation = buildLaunchInvocation(manifest, { taskIds: [], barrier: { path: '/b', release: 'r' }, reportPath: '/tmp/runner-report.md' })
+    const invocation = buildLaunchInvocation(manifest, { taskIds: [], barrier: { path: '/b', release: 'r' }, reportPath: '/tmp/runner-report.json', markdownPath: '/tmp/runner-report.md', sessionDir: '/tmp/session', bindings })
     const turns = invocation.argv[invocation.argv.indexOf('--autonomous-max-turns') + 1]
     expect(turns).toBe(String(DEFAULT_LIMITS.maxTurns))
   })
@@ -79,8 +108,10 @@ describe('the bounded autonomous invocation', () => {
       featureDir: 'specs/001-prime-runner-bridge',
       taskIds: ['T010'],
       nextGateId: 'T012',
-      reportPath: 'specs/001-prime-runner-bridge/runner-report.md',
+      reportPath: 'specs/001-prime-runner-bridge/runner-report.json',
+      markdownPath: 'specs/001-prime-runner-bridge/runner-report.md',
       barrierPath: '/tmp/barrier',
+      bindings,
     })
     expect(prompt).toContain('approved scope')
     expect(prompt).toContain('MANUAL GATE')
@@ -94,7 +125,7 @@ describe('the bounded autonomous invocation', () => {
   it('never names a task outside the approved range', () => {
     const prompt = segmentPrompt({
       featureDir: 'specs/x', taskIds: ['T010', 'T011'], nextGateId: 'T012',
-      reportPath: 'r.md', barrierPath: '/b',
+      reportPath: 'r.json', markdownPath: 'r.md', barrierPath: '/b', bindings,
     })
     expect(prompt).toContain('T010 through T011')
     expect(prompt).not.toContain('T013')
