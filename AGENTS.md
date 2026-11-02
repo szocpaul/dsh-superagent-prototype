@@ -277,6 +277,17 @@ GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git p
   task list of a manifest carries no checkbox state, so the continuation was
   refused with "the human has not marked the gate complete" even though the gate
   commit had changed exactly that line.
+- **A deliverynek idempotensnek kell lennie.** A controller a commitot az aktuális
+  idővel hozta létre, így minden újrapróbálkozás más revíziót adott, és a delivery
+  elutasította a saját publikálását. A commit dátuma most rögzített, a pull requestet
+  a szerverről keresi (a controller memóriája újraindítás után üres), és a branch azt a
+  headet viseli, amelyet a delivery éppen ellenőrzött.
+- **A folytatás indításakor a checkout ágat vált, de a munkafa piszkos volt.** A runner
+  a saját eredményét hagyja a munkafában, és a git megtagadja az ágváltást. A munkafa
+  félretétele a váltáshoz és a visszavétele utána megoldja.
+- **Az a szegmens, amelynek a runnere el sem indult, újraindulhat** — a launch hibája
+  eddig `unknown` fázisban maradt, amit a reconciler kihagyott, így beragadt. Egy
+  automatikus újrapróbálkozás tartozik hozzá, a második hibához már ember kell.
 - **The Feishu consumer's health had one race.** The consumer's ready report and
   the error a malformed event reports arrive on two streams in either order, and the
   ready report could erase the error. The consumer keeps the error now, and
