@@ -240,6 +240,11 @@ GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git p
   the reconciliation never read the report the runner had written.
 - **A ticket whose segment was stopped could not run again**, because the approval
   effect treated every segment that was not blocked as a run in flight.
+- **The runner cannot compute a digest over the whole workspace**, because that
+  algorithm belongs to the controller. The contract now says that the report names
+  the files the runner changed and the SHA-256 of each of them, and the controller
+  derives the same list from the workspace's own version control and compares
+  every path and every digest.
 - **The Feishu consumer's health had one race.** The consumer's ready report and
   the error a malformed event reports arrive on two streams in either order, and the
   ready report could erase the error. The consumer keeps the error now, and
