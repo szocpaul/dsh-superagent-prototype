@@ -18,6 +18,10 @@ function gitCommands(root: string): Commands {
       const result = await exec('git', args, { cwd: cwd || root })
       return result.stdout
     },
+    run: async (program: string, args: string[], cwd?: string) => {
+      const result = await exec(program, args, { cwd: cwd || root })
+      return result.stdout
+    },
   } as unknown as Commands
 }
 
@@ -41,6 +45,24 @@ describe('the host verification', () => {
       expect(revision).toMatch(/^[0-9a-f]{40}$/)
       const committed = readFileSync(join(root, 'src/smoke.ts'), 'utf8')
       expect(committed).toContain('export const smoke')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('creates the same revision every time, when the date is fixed', async () => {
+    const root = await gitRoot()
+    try {
+      await exec('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'base'], { cwd: root })
+      const committer = revisionPort(gitCommands(root), root)
+      const input = {
+        files: [{ path: 'src/smoke.ts', content: Buffer.from('export const smoke = () => "smoke"\n') }],
+        message: 'controller: the verified result',
+        date: '2026-11-01T00:00:00.000Z',
+      }
+      const first = await committer.commit(input)
+      const second = await committer.commit(input)
+      expect(second).toBe(first)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

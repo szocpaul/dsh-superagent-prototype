@@ -94,8 +94,11 @@ export function revisionPort(commands: Commands, root: string, branch?: string):
       // and no change to commit. The result is still a revision of its own, or the delivery would have nothing to
       // publish and the run would end without a result.
       if (input.files.length > 0) await git(['add', '--', ...input.files.map(file => file.path)])
-      const date = input.date ? ['-c', `GIT_AUTHOR_DATE=${input.date}`, '-c', `GIT_COMMITTER_DATE=${input.date}`] : []
-      await git(['-c', 'user.name=dsh-superagent', '-c', `user.email=${process.env.DSH_PRIME_COMMIT_EMAIL ?? 'dsh-superagent@users.noreply.github.com'}`, ...date, 'commit', '--no-verify', '--allow-empty', '-m', input.message])
+      const args = ['-c', 'user.name=dsh-superagent', '-c', `user.email=${process.env.DSH_PRIME_COMMIT_EMAIL ?? 'dsh-superagent@users.noreply.github.com'}`, 'commit', '--no-verify', '--allow-empty', '-m', input.message]
+      // The date of the commit is part of the commit, so it has to be fixed: the same result yields the same revision
+      // every time, and a delivery that runs again finds the revision it published before.
+      if (input.date) await commands.run('env', [`GIT_AUTHOR_DATE=${input.date}`, `GIT_COMMITTER_DATE=${input.date}`, 'git', ...args], root)
+      else await git(args)
       const commit = await git(['rev-parse', 'HEAD'])
       if (parent) await git(['reset', '--mixed', parent])
       return commit
