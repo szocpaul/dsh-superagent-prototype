@@ -499,7 +499,8 @@ function approvalSource(deps: PrimeServiceDeps, ticketId: string): ApprovalSourc
     policyVersion: () => policyVersion(deps.settings()),
     async fetchComment(commentId: string): Promise<ApprovalEvidence | undefined> {
       if (!number) return undefined
-      const row = await deps.commands().api(CommentRow, `issues/${number}/comments/${commentId}`)
+      // GitHub serves one issue comment under issues/comments/<id>; the route that carries the issue number is not one.
+      const row = await deps.commands().api(CommentRow, `issues/comments/${commentId}`)
       if (!row.user) return undefined
       return {
         commentId: String(row.id),

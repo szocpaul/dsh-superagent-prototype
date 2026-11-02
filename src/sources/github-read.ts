@@ -305,12 +305,13 @@ export async function readBranchHead(commands: Commands, branch: string): Promis
  * Re-reads one Issue or PR conversation comment and its current actor, so an approval is checked against the comment as
  * it stands now rather than as the caller last saw it.
  */
-export async function readComment(commands: Commands, number: number, commentId: string): Promise<GithubCommentEvidence | undefined> {
+export async function readComment(commands: Commands, commentId: string): Promise<GithubCommentEvidence | undefined> {
+  // GitHub serves one issue comment under issues/comments/<id>; the route that carries the issue number is not one.
   const comment = await commands.api(z.looseObject({
     id: z.number(), body: z.string().nullish(),
     user: z.looseObject({ login: z.string(), id: z.number().nullish(), type: z.string().nullish() }).nullable(),
     updated_at: z.string().nullish(), created_at: z.string().nullish(),
-  }), `issues/${number}/comments/${commentId}`)
+  }), `issues/comments/${commentId}`)
   if (!comment.user) return undefined
   return {
     commentId: String(comment.id),

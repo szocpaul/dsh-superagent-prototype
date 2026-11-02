@@ -45,7 +45,10 @@ function dependencies(root: string, store: Store, rows: unknown[], repository: {
     git: async (args: string[], cwd: string) => execFileSync('git', args, { cwd, encoding: 'utf8' }),
     api: async (_schema: unknown, path: string) => {
       if (path === '') return { id: repository.id, name: 'example/fixture' }
-      const id = Number(path.split('/').pop())
+      // GitHub serves one issue comment under issues/comments/<id>; any other route is a 404.
+      const comment = /^issues\/comments\/(\d+)$/.exec(path)
+      if (!comment) throw new Error(`404 Not Found (${path})`)
+      const id = Number(comment[1])
       return (rows as { id: number }[]).find(row => row.id === id)
     },
     pages: async () => rows,
