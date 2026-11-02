@@ -8,9 +8,9 @@
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { lstatSync, readdirSync, readFileSync } from 'node:fs'
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join, relative, resolve, sep } from 'node:path'
+import { delimiter, dirname, join, relative, resolve, sep } from 'node:path'
 import type { ApprovedManifest } from '../executor/prime-model.ts'
 
 /** Raised when the host cannot provide a required confinement, or when a path escapes its approved root. */
@@ -150,6 +150,53 @@ function firstRegularFile(directory: string): string | undefined {
 }
 
 /**
+ * One host command the confinement has to be able to execute.
+ */
+export interface BoundCommand {
+  /** The command as the manifest names it. */
+  command: string
+  /** The file the command resolves to on the host. */
+  file: string
+  /** The host directories that have to be bound read-only for the command to run. */
+  directories: string[]
+  /** The directory the command is resolved from, which the sandbox's PATH has to name. */
+  searchPath: string
+}
+
+/**
+ * The directories a resolved command needs beside its own file.
+ *
+ * A command installed as a package keeps its own files next to it: the packaged runtime and the bundled models of
+ * the runner, the module tree of a JavaScript command. The package root is bound, not only the file.
+ */
+function commandDirectories(file: string): string[] {
+  const parts = file.split(sep)
+  const index = parts.lastIndexOf('node_modules')
+  if (index >= 0 && index + 1 < parts.length) return [parts.slice(0, index + 2).join(sep)]
+  return [dirname(file)]
+}
+
+/**
+ * Resolves one command on the host and names the paths the confinement has to bind for it.
+ *
+ * The runner and the commands the approved checks name live outside the repository and outside the masked home,
+ * so the confinement binds their directories read-only and the sandbox's PATH names the directory each command is
+ * resolved from.
+ * @returns The resolved command, or undefined when the host has no such command.
+ */
+export function resolveCommand(command: string, path = process.env.PATH ?? ''): BoundCommand | undefined {
+  const candidates = command.includes(sep) ? [command] : path.split(delimiter).filter(Boolean).map(directory => join(directory, command))
+  for (const candidate of candidates) {
+    try {
+      if (!statSync(candidate).isFile()) continue
+      const file = realpathSync(candidate)
+      return { command, file, directories: commandDirectories(file), searchPath: dirname(candidate) }
+    } catch { /* the next candidate is tried */ }
+  }
+  return undefined
+}
+
+/**
  * Builds the plan of one run from the approved manifest and the workspace.
  * @throws IsolationError when the manifest approves no isolation backend, or when a writable path leaves the
  * workspace or the repository.
@@ -172,6 +219,13 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
   }
   const segmentId = options.segmentId ?? 'unassigned'
   const sample = firstRegularFile(root)
+  // The runner and the commands the approved checks name are bound read-only, so the confinement can execute them
+  // even though the operator's home is masked and only the repository is bound.
+  const runner = resolveCommand(manifest.environment.runner.cli)
+  const tools = manifest.checks.map(check => check.argv[0] ?? '').filter(Boolean).map(command => resolveCommand(command))
+  const bound = [runner, ...tools].filter((item): item is BoundCommand => item !== undefined)
+  const directories = [...new Set(bound.flatMap(item => [...item.directories, item.searchPath]))]
+  const searchPath = [...new Set([...bound.map(item => item.searchPath), '/usr/local/bin', '/usr/bin', '/bin'])].join(':')
   return {
     backend: 'bubblewrap',
     segmentId,
@@ -180,14 +234,14 @@ export function isolationPlan(manifest: ApprovedManifest, workspace: string, opt
     mountPoint: '/workspace',
     workspaceMount: work === root ? '/workspace' : `/workspace/${relative(root, work)}`,
     writablePaths,
-    readOnlyPaths: [root, ...(options.systemPaths ?? DEFAULT_SYSTEM_PATHS).map(path => resolve(path))],
+    readOnlyPaths: [root, ...directories, ...(options.systemPaths ?? DEFAULT_SYSTEM_PATHS).map(path => resolve(path))],
     readOnlySample: sample ? join(root === work ? '/workspace' : `/workspace/${relative(root, work)}`, relative(root, sample)) : '/workspace',
     network: isolation.network,
     allowedEndpoints: [...isolation.allowedEndpoints],
     home: resolve(options.home ?? homedir()),
     tmp: resolve(options.tmp ?? tmpdir()),
-    argv: options.argv ?? [manifest.environment.runner.cli],
-    env: { HOME: '/tmp', TMPDIR: '/tmp', PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8' },
+    argv: runner ? [runner.file, ...(options.argv ?? [manifest.environment.runner.cli]).slice(1)] : options.argv ?? [manifest.environment.runner.cli],
+    env: { HOME: '/tmp', TMPDIR: '/tmp', PATH: searchPath, LANG: 'C.UTF-8' },
     inheritedDescriptors: [0, 1, 2],
     cgroup: cgroupPath(segmentId),
     socket: socketPath(segmentId),

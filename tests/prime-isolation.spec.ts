@@ -4,12 +4,13 @@
  * deterministic run identities, the containment probes, and the stop, quiescence and cleanup verdicts. Every
  * external effect is faked, so the tests need no bubblewrap, systemd, or root.
  */
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, linkSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, linkSync, existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   buildBwrapArgs,
+  resolveCommand,
   cgroupPath,
   cgroupProcesses,
   collectArtifacts,
@@ -124,9 +125,32 @@ describe('isolation plan', () => {
     expect(args).toContain(root)
     expect(args).toContain('--bind')
     expect(args).toContain(join(root, 'src', 'fixture.ts'))
-    expect(args.slice(-3)).toEqual(['--', 'prime-agent', 'run'])
+    const command = resolveCommand('prime-agent')?.file ?? 'prime-agent'
+    expect(args.slice(-3)).toEqual(['--', command, 'run'])
     expect(args).not.toContain('--sync-fd')
     expect(plan.inheritedDescriptors).toEqual([0, 1, 2])
+  })
+
+  it('binds the runner and the commands of the approved checks, so the confinement can execute them', () => {
+    const root = workspace()
+    const tools = mkdtempSync(join(tmpdir(), 'prime-tools-'))
+    const runnerFile = join(tools, 'runner')
+    const checkFile = join(tools, 'check')
+    writeFileSync(runnerFile, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    writeFileSync(checkFile, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const approved = manifest()
+    const plan = isolationPlan({
+      ...approved,
+      checks: [{ name: 'check', argv: [checkFile], cwd: '.', timeoutMs: 1000 }],
+      environment: { ...approved.environment, runner: { cli: runnerFile, version: '0.0.0' } },
+    }, root, { argv: [runnerFile, 'run'] })
+    // The runner is named by its resolved path, because the sandbox resolves no command from the operator's PATH.
+    expect(plan.argv[0]).toBe(realpathSync(runnerFile))
+    expect(plan.readOnlyPaths).toContain(tools)
+    expect(plan.env.PATH).toContain(tools)
+    const args = buildBwrapArgs(plan)
+    const readOnly = args.reduce<string[]>((found, value, index) => (args[index - 1] === '--ro-bind' ? [...found, value] : found), [])
+    expect(readOnly).toContain(tools)
   })
 
   it('binds only the approved writable paths writable', () => {

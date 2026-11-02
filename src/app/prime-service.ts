@@ -11,7 +11,7 @@ import { key } from '../core/ids.ts'
 import type { OutboundMessage, Ticket } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
-import { isolationPlan, type IsolationPlan } from '../infra/prime-isolation.ts'
+import { isolationPlan, resolveCommand, type IsolationPlan } from '../infra/prime-isolation.ts'
 import { PrimeSupervisor, type RunEnvironment } from '../executor/prime-supervisor.ts'
 import { deliver as deliverPull, type BranchProtection, type CreatePullInput, type DeliveryLedger, type PullPort,
   type PullRef, type PullState, type UpdatePullInput } from '../executor/prime-delivery.ts'
@@ -432,7 +432,15 @@ export function hostPreflightHost(deps: PrimeServiceDeps): PreflightHost {
     async checks(): Promise<{ name: string; ok: boolean; detail: string }[]> {
       const manifest = deps.manifests().at(0)
       const checks = manifest?.checks ?? []
-      return checks.map(check => ({ name: check.name, ok: true, detail: `the check ${check.argv.join(' ')} is approved` }))
+      // A check that names a command the host does not have could not run inside the confinement either, so the
+      // launch is blocked while the operator can install it or approve a different check.
+      return checks.map(check => {
+        const program = check.argv[0] ?? ''
+        const resolved = resolveCommand(program)
+        return resolved
+          ? { name: check.name, ok: true, detail: `the check ${check.argv.join(' ')} is approved and its command runs on the host` }
+          : { name: check.name, ok: false, detail: `the command of the check ${check.argv.join(' ')} is not installed on the host` }
+      })
     },
     async confinement(): Promise<{ ok: boolean; detail: string }> {
       const environment = hostRunEnvironment(commands)
