@@ -55,6 +55,16 @@ known flaky test in `tests/sources.spec.ts` instead of building the manifest. Th
 next run needs the operator's approval of the digest the system posts, and the
 gate after it.
 
+**Following a run.** The operator reaches the panel through an SSH tunnel over the
+tailnet, not through a proxy: `ssh -N -L 3082:127.0.0.1:3082 ubuntu@100.118.113.57`,
+then `http://127.0.0.1:3082/?token=<token>` (the token is in the newest log under
+`.artifacts`). The local port must be 3082, because the management routes accept
+only that host. The state of the runs is also on the host: `prime-run-watch` prints
+the bridge's segments, the barrier, the quota and the cgroup of the run, and
+`prime-run-watch -f` follows the runner's live transcript. The API answers
+`http://127.0.0.1:3082/orchestrator/api/overview` with the header
+`x-orchestrator-request: 1`.
+
 **Do not write the digest down.** The manifest names its baseline commit, so every
 commit invalidates it. Read the digest the Ticket's question names, in the panel or
 in the comment the system posts on the issue.
@@ -187,6 +197,49 @@ GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git p
   `max-tokens` in the middle of a repair and left the Ticket with a stale
   `running` assignment; the panel's retry is refused when the last assignment
   reported nothing, so the operator stops the Ticket and posts a fresh request.
+- **The confinement had none of the run's own tools.** The runner's command, the
+  commands of the approved checks and the tool that sets the runner's kernel up
+  were all outside the confinement, and the manifest's isolation named no writable
+  path at all, so the checkout was read-only and the runner could not write the
+  files it was asked to write. The manifest now carries the approved scope as its
+  writable scope, and the plan binds the resolved commands read-only.
+- **The runner's own home is masked, so the run needs its own configuration.**
+  The runner reads its providers from its home; without a configuration of its own
+  it fell back to the definition it ships with, which names another endpoint, and
+  the model call failed. The controller writes the approved provider and model into
+  the run's own home, with the credential named by its environment variable and
+  never by its value.
+- **The installed runner does not announce its session identity.** The supervisor
+  read it from the runner's output, so the barrier that releases the runner was
+  never written and the run waited for a decision that could not arrive. The
+  runner names its session file after the session, so the supervisor looks in the
+  run's own session directory as well.
+- **The runner's kernel takes longer than the identity timeout.** The kernel is set
+  up from scratch on the first run of a segment, which takes longer than the wait
+  the supervisor allowed, so the run was killed while it was still starting.
+- **The runner ran outside the cgroup of its own run.** The run's stop could not
+  reach it, and the placeholder of the service unit made the cgroup look busy
+  after the runner had died. The runner joins the cgroup of its run, and the
+  liveness of a run counts the processes of the run and not the placeholder.
+- **The checkout holds the deployment's own secrets.** The machine state of the
+  repository carries the deployment's credentials, so the confinement masks it.
+- **The verifier inherited the controller's whole environment**, and with it the
+  agent's GitHub credential helper: the verifier held a GitHub credential, which
+  the contract forbids, and two tests failed because of the inherited variable.
+  The verifier's check now runs with a complete, minimal environment of its own.
+- **The verifier ran its checks on the host's small temporary filesystem**, where
+  the project's dependencies do not fit. The scratch copy of a check now lives in
+  the run's own storage. The package manager also refuses a linked dependency
+  tree, so the verifier copies the dependencies instead of linking them.
+- **The delivery asked for the protection of the branch that does not exist yet**,
+  and read the server's answer in the wrong shape, so every run ended with an
+  unknown remote outcome. The merge rights that matter are the ones of the branch
+  the pull request lands on.
+- **A run that ends is noticed by a reconciliation, not by the runner.** The bridge
+  reconciled only at startup, so a finished run waited for the next restart, and
+  the reconciliation never read the report the runner had written.
+- **A ticket whose segment was stopped could not run again**, because the approval
+  effect treated every segment that was not blocked as a run in flight.
 - **The Feishu consumer's health had one race.** The consumer's ready report and
   the error a malformed event reports arrive on two streams in either order, and the
   ready report could erase the error. The consumer keeps the error now, and
