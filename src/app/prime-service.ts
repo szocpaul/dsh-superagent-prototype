@@ -14,6 +14,7 @@ import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import { isolationPlan, resolveCommand, type IsolationPlan } from '../infra/prime-isolation.ts'
 import { PrimeSupervisor, type RunEnvironment } from '../executor/prime-supervisor.ts'
+import { readBranchProtection } from '../sources/github-read.ts'
 import { deliver as deliverPull, type BranchProtection, type CreatePullInput, type DeliveryLedger, type PullPort,
   type PullRef, type PullState, type UpdatePullInput } from '../executor/prime-delivery.ts'
 import { QuotaMonitor, type GuardIdentity } from '../executor/prime-quota.ts'
@@ -442,7 +443,12 @@ export function pullPort(commands: Commands, root: string): PullPort {
       return api<PullState>(`pulls/${number}`)
     },
     async branchProtection(branch: string): Promise<BranchProtection> {
-      return api<BranchProtection>(`branches/${encodeURIComponent(branch)}/protection`)
+      // The rules GitHub reports for the branch, read in the shape the delivery decides on.
+      const rules = await readBranchProtection(commands, branch)
+      return {
+        required: rules.requiresReviews,
+        forbidsMerge: rules.enforceAdmins && rules.requiredApprovals > 0,
+      }
     },
   }
 }
