@@ -262,6 +262,21 @@ GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git p
   branch of the run, so its parent is the published result revision. The segment
   never carried a baseline revision at all, so the gate expected the parent of a
   gate commit to be the empty string, and no commit could ever satisfy it.
+- **A verified gate decision must be recorded before the continuation.** The bridge
+  verified the human's gate decision and then dropped it: the record was never
+  stored, so the continuation found no decision and the segment waited at the gate
+  forever. The refusal was silent, because the lookup swallowed the reason, so the
+  only way to see it was to patch the built bundle and read what the running
+  service wrote. The decision is recorded now, a repeated poll answers with the
+  record it already made, and `tests/prime-run-request.spec.ts` proves it.
+- **The gated segment must release the runner slot before the continuation takes
+  it.** The segment ended after the continuation had tried to reserve the slot, so
+  the reservation failed and the run waited at the gate again. The segment now ends
+  first, in the same transaction that reserves the slot for the continuation.
+- **A gate counts as complete once the human's commit changed its checkbox.** The
+  task list of a manifest carries no checkbox state, so the continuation was
+  refused with "the human has not marked the gate complete" even though the gate
+  commit had changed exactly that line.
 - **The Feishu consumer's health had one race.** The consumer's ready report and
   the error a malformed event reports arrive on two streams in either order, and the
   ready report could erase the error. The consumer keeps the error now, and
