@@ -455,7 +455,8 @@ export function pullPort(commands: Commands, root: string): PullPort {
     async pullForBranch(branch: string): Promise<number | undefined> {
       // The pull request of a branch is found on the server: the ledger of the controller is memory, and a restart
       // empties it, while the pull request stays open.
-      const found = await api<{ number: number }[]>('pulls', '-f', `head=${branch}`, '-f', 'state=open').catch(() => [] as { number: number }[])
+      const query = `pulls?head=${encodeURIComponent(branch)}&state=open`
+      const found = await api<{ number: number }[]>(query).catch(() => [] as { number: number }[])
       return found[0]?.number
     },
     async treeOf(revision: string): Promise<string | undefined> {
