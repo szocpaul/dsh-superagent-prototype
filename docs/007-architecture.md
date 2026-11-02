@@ -479,6 +479,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/prime-preflight.spec.ts` | The preflight: each failed prerequisite, the unsupported flag, the unapproved write, and the evidence without secrets |
 | `tests/prime-result.spec.ts` | The report as untrusted data, the redaction, the scope audit, the rerun of the checks, and the convergence rounds |
 | `tests/prime-delivery.spec.ts` | The delivery: one pull request, the push lease, the auto-merge and branch protection refusals, and the unknown outcome |
+| `tests/prime-pull-port.spec.ts` | The pull request port: the fields the server is sent, the JSON answer, and the auto-merge request |
 | `tests/prime-human-gate.spec.ts` | The gate: the untouched later tasks, the question, the durable evidence, the draft, and the events that never approve a gate |
 | `tests/prime-failures.spec.ts` | The distinct failure causes, their evidence, their next action, and the secret redaction |
 | `tests/prime-stop.spec.ts` | The stop: its durable intent with the Ticket's end, the stop epoch, the fence of a late callback, and the reservation a stop keeps |
