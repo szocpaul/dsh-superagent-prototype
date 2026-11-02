@@ -52,16 +52,21 @@ export function verifierEnvironment(workspace: string): Record<string, string | 
 export async function checkoutRunBranch(git: (args: string[]) => Promise<string>, branch: string): Promise<void> {
   await git(['fetch', '--quiet', 'origin', branch]).catch(() => undefined)
   const remote = await git(['rev-parse', '--verify', `refs/remotes/origin/${branch}`]).catch(() => undefined)
-  if (remote) {
-    await git(['checkout', '-B', branch, `origin/${branch}`])
-    return
+  // The checkout holds the run's own result, and git refuses to switch branches over a change it would overwrite. The
+  // result is committed on the branch of the run, so the working copy is set aside for the switch and taken back
+  // afterwards: the changes that the branch already carries are the same, and the others stay the operator's.
+  const stashed = await git(['stash', 'push', '--quiet']).then(() => true).catch(() => false)
+  try {
+    if (remote) {
+      await git(['checkout', '-B', branch, `origin/${branch}`])
+    } else {
+      const local = await git(['rev-parse', '--verify', `refs/heads/${branch}`]).catch(() => undefined)
+      if (local) await git(['checkout', branch])
+      else await git(['checkout', '-b', branch])
+    }
+  } finally {
+    if (stashed) await git(['stash', 'pop']).catch(() => undefined)
   }
-  const local = await git(['rev-parse', '--verify', `refs/heads/${branch}`]).catch(() => undefined)
-  if (local) {
-    await git(['checkout', branch])
-    return
-  }
-  await git(['checkout', '-b', branch])
 }
 
 /**

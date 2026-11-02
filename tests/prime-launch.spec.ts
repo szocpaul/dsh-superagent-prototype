@@ -186,6 +186,38 @@ describe('the runner adapter', () => {
     return root
   }
 
+  it('puts the checkout on the branch of the run even when the working tree holds the run\'s own changes', async () => {
+    const root = await gitRoot()
+    try {
+      mkdirSync(join(root, 'workspace'), { recursive: true })
+      // The run leaves its result in the working tree, and the branch of the run carries the same result committed.
+      writeFileSync(join(root, 'result.txt'), 'base\n')
+      await exec('git', ['add', '.'], { cwd: root })
+      await exec('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=t', 'commit', '-m', 'the result'], { cwd: root })
+      await exec('git', ['branch', 'agent/ticket-1'], { cwd: root })
+      writeFileSync(join(root, 'result.txt'), 'changed\n')
+      const commands = { git: async (args: string[], cwd: string) => (await exec('git', args, { cwd })).stdout } as unknown as Commands
+      const supervisor = {
+        launch: async () => ({ identity: { sessionId: 'session-1', sessionFile: '/run/session.v4.jsonl' } }),
+      } as unknown as PrimeSupervisor
+      const deps = { commands: () => commands, repositoryRoot: () => root } as unknown as PrimeServiceDeps
+      const segment = {
+        segmentId: 'segment-1', ticketId: 'ticket-1', assignmentId: 'assignment-1', generation: 1, stopEpoch: 0,
+        taskIds: ['T004'], nextGateId: null,
+        runner: {
+          serviceUnit: 'dsh-prime-segment1', cgroup: '/sys/fs/cgroup/dsh-prime-segment1', tmux: 'dsh-prime-segment1',
+          socket: join(root, 'socket'), workspace: join(root, 'workspace'), branch: 'agent/ticket-1',
+        },
+      } as unknown as BridgeSegment
+      await runnerAdapter(supervisor, deps).launch(segment, manifest)
+      expect((await exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root })).stdout.trim()).toBe('agent/ticket-1')
+      // The change the operator's working tree held is taken back, not lost.
+      expect(readFileSync(join(root, 'result.txt'), 'utf8')).toBe('changed\n')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('puts the checkout on the branch of the run before the runner starts', async () => {
     const root = await gitRoot()
     try {

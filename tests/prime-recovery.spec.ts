@@ -106,6 +106,38 @@ describe('the recovery decision', () => {
   })
 })
 
+describe('a run whose runner never started', () => {
+  it('starts it again once the cause is gone, and waits for an operator after a second failure', async () => {
+    const segment = reserve(host)
+    host.store.bridge.segments.save({ ...segment, phase: 'unknown' })
+    host.store.bridge.failures.save({
+      id: `${segment.segmentId}-provider-2026-11-01T00:00:00.000Z`, ticketId: segment.ticketId, cause: 'provider',
+      summary: 'The runner did not start: the checkout could not switch branches', evidence: 'the launch evidence',
+      nextAction: 'Reconcile the runner state', at: '2026-11-01T00:00:00.000Z',
+    })
+    await host.bridge.reconcile(segment.segmentId)
+    // The segment holds no session and wrote no report, so the launch may run again.
+    expect(host.store.bridge.segments.get(segment.segmentId)?.phase).toBe('launching')
+    expect(host.store.db.prepare('SELECT COUNT(*) AS n FROM effect WHERE kind=? AND key=?').get('prime-launch', segment.segmentId)?.n).toBe(1)
+    // A second failure waits for a person, so a cause that is not gone cannot spin the segment.
+    host.store.bridge.failures.save({
+      id: `${segment.segmentId}-provider-2026-11-01T00:00:01.000Z`, ticketId: segment.ticketId, cause: 'provider',
+      summary: 'The runner did not start: the checkout could not switch branches', evidence: 'the launch evidence',
+      nextAction: 'Reconcile the runner state', at: '2026-11-01T00:00:01.000Z',
+    })
+    host.store.bridge.segments.save({ ...segment, phase: 'unknown' })
+    await host.bridge.reconcile(segment.segmentId)
+    expect(host.store.bridge.segments.get(segment.segmentId)?.phase).not.toBe('launching')
+  })
+
+  it('leaves a segment whose state cannot be established alone, when no launch failed', async () => {
+    const segment = reserve(host)
+    host.store.bridge.segments.save({ ...segment, phase: 'unknown' })
+    await host.bridge.reconcile(segment.segmentId)
+    expect(host.store.bridge.segments.get(segment.segmentId)?.phase).not.toBe('launching')
+  })
+})
+
 describe('the periodic reconciliation', () => {
   it('reconciles a running segment and leaves a finished one to its own effect', () => {
     const host = harness()
@@ -115,7 +147,7 @@ describe('the periodic reconciliation', () => {
     const running = host.store.db.prepare('SELECT kind FROM effect WHERE kind = ?').all('prime-reconcile')
     expect(running).toHaveLength(1)
 
-    host.store.bridge.segments.save({ ...segment, phase: 'unknown' })
+    host.store.bridge.segments.save({ ...segment, phase: 'ready' })
     host.store.db.prepare('DELETE FROM effect WHERE kind = ?').run('prime-reconcile')
     host.bridge.reconcileOpenSegments()
     expect(host.store.db.prepare('SELECT kind FROM effect WHERE kind = ?').all('prime-reconcile')).toHaveLength(0)

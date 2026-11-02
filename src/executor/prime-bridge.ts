@@ -249,7 +249,7 @@ export class PrimeBridge {
     for (const segment of this.host.store.bridge.segments.list()) {
       // A segment that already left the runner's phase is driven by its own effect, and an unknown delivery waits for
       // an operator; reconciling it again would repeat the verification and the delivery without a new reason.
-      if (['stopped', 'ready', 'blocked', 'failed', 'unknown', 'verifying', 'gate_wait'].includes(segment.phase)) continue
+      if (['stopped', 'ready', 'blocked', 'failed', 'verifying', 'gate_wait'].includes(segment.phase)) continue
       this.host.effects.enqueueSegment('prime-reconcile', segment.segmentId, segment.generation)
     }
   }
@@ -407,6 +407,15 @@ export class PrimeBridge {
       remote: 'known',
       ticketEnded: !!ticket?.ended,
     })
+    // A run whose runner never started may start again once the cause is gone: the segment holds no session, wrote no
+    // report, and its runner is confirmed stopped. One automatic retry belongs to the segment; a second failure waits
+    // for an operator, so a cause that is not gone cannot spin the segment.
+    if (segment.phase === 'unknown' && segment.runner.sessionId === undefined && !state.report && state.stop === 'stopped'
+      && this.launchFailures(segment) === 1) {
+      this.phase(segment, 'launching')
+      this.host.effects.enqueueSegment('prime-launch', segment.segmentId, segment.generation)
+      return
+    }
     if (decision.action === 'continue') { this.phase(segment, 'running'); return }
     if (decision.action !== 'deliver') {
       // A run that stopped without a report is blocked; any other state that cannot be established stays unknown.
@@ -554,6 +563,12 @@ export class PrimeBridge {
         baseRevision: decision.gateCommit ?? segment.baseRevision,
       })
     })
+  }
+
+  /** How many times the launch of a segment failed, so a retry can be bounded. */
+  private launchFailures(segment: BridgeSegment): number {
+    return this.host.store.bridge.failures.byTicket(segment.ticketId)
+      .filter(record => (record.id ?? '').startsWith(segment.segmentId) && record.cause === 'provider').length
   }
 
   /** Records a failure of a segment with its cause and the action an operator must take. */
