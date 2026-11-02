@@ -36,12 +36,14 @@ the disposable feature `specs/002-smoke-fixture`. The plan is in
 `specs/001-prime-runner-bridge/t054-plan.md`; the operator's steps are in
 `specs/001-prime-runner-bridge/operator-steps.md`.
 
-**The state at the end of 2026-11-01**: the Ticket `8b43e5eb` waits for the
-operator's approval. Its manifest names the writable paths `src/smoke.ts` and
-`tests/smoke.spec.ts`, the checks `pnpm run typecheck` and `pnpm run test`, the
-tasks `T001` to `T005` with `T003` as the human gate, and the environment digest
-`8947a897`. Every comment on issue #4 was deleted afterwards by the operator's own
-account, so the issue is empty.
+**The state at the end of 2026-11-02**: three bridge defects were found and fixed
+during the smoke (the approval comment's route, the socket directory, and the cgroup
+of a run that is gone). The Ticket `8b43e5eb` was stopped, because its failed
+segment held the single runner slot, and a fresh request created the Ticket
+`1b5ff5d1`, whose manifest waits for the operator's approval on issue #4. The
+manifest names the writable paths `src/smoke.ts` and `tests/smoke.spec.ts`, the
+checks `pnpm run typecheck` and `pnpm run test`, the tasks `T001` to `T005` with
+`T003` as the human gate, and the environment digest `8947a897`.
 
 **Do not write the digest down.** The manifest names its baseline commit, so every
 commit invalidates it. Read the digest the Ticket's question names, in the panel or
@@ -49,26 +51,31 @@ in the comment the system posts on the issue.
 
 **The next step, in order:**
 
-1. Post a request comment on **issue #4** of the fork:
-
-   ```text
-   @szocpaul-dsh-agent Run the approved feature specs/002-smoke-fixture with the Prime runner.
-   ```
-
-2. The worker calls `orchestrator_prime_request`, the controller builds the manifest
-   and posts the digest. The operator approves that exact digest with a second
-   comment, and the comment must be exactly one line:
+1. The operator approves the digest the system posted on **issue #4** with a
+   comment that is exactly one line:
 
    ```text
    @szocpaul-dsh-agent APPROVE RUN <the digest the system posted>
    ```
 
-3. The runner performs the automatable tasks, stops at the `MANUAL GATE` task, and
+2. The runner performs the automatable tasks, stops at the `MANUAL GATE` task, and
    opens a **draft** pull request. Nothing is merged; `main` stays protected.
 
-Post a **fresh** request rather than approving the digest above: the manifest names
-its baseline commit, so a manifest built before a later commit is stale. The digest
-changes with every commit, so always approve the digest the system posts.
+3. The gate asks its own question. The operator answers it in two steps: tick the
+   gate's checkbox in the approved task list with a GitHub-authenticated edit under
+   their own identity, then reply with
+   `@szocpaul-dsh-agent APPROVE GATE <gate> <digest> <full-gate-commit-sha>`.
+
+If the digest is gone or the service is down, start over with a request comment on
+issue #4:
+
+```text
+@szocpaul-dsh-agent Run the approved feature specs/002-smoke-fixture with the Prime runner.
+```
+
+Approve only the digest the system posts: the manifest names its baseline commit,
+so a manifest built before a later commit is stale. The digest changes with every
+commit, so a digest from an earlier run is never the one to approve.
 
 The question names the agent account, so the approval comment must mention
 `@szocpaul-dsh-agent`; the parser accepts no other form.
@@ -139,6 +146,28 @@ GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git p
   has a model budget of 40500. `tests/cards.spec.ts` and `tests/model-surface.spec.ts`
   enforce both, so keep new instructions in `prompts/work.md` and keep the worker
   prompt short.
+- **A restart from inside the worker session can leave the service down.** The
+  worker started `scripts/dsh-superagent restart` as a background job; the stop
+  ended the worker's own session before the start phase ran, so the tmux session
+  was gone and the Ticket waited with no digest. Check
+  `python3 scripts/dsh-superagent status` first; start the service by hand if it
+  is down.
+- **An issue comment is served under `repos/<owner>/<repo>/issues/comments/<id>`.**
+  The route that carries the issue number answers 404 for every comment, and the
+  approval evidence was read from there, so a manifest the operator had approved
+  waited forever.
+- **The run's socket has to live in the account's own runtime directory.** The
+  system runtime directory (`/run`) belongs to root, and the unprivileged
+  deployment account cannot create a directory under it.
+- **The cgroup of a run is removed with its unit.** The unit is created with
+  `--collect`, so after the run's service ended, its cgroup was gone and the
+  bridge could not prove that the run had ended: the stop stayed unconfirmed, the
+  segment kept the single runner slot, and no further run could start. A cgroup
+  that does not exist holds no process.
+- **A worker session can end on its model budget.** The session stopped with
+  `max-tokens` in the middle of a repair and left the Ticket with a stale
+  `running` assignment; the panel's retry is refused when the last assignment
+  reported nothing, so the operator stops the Ticket and posts a fresh request.
 - **`tests/sources.spec.ts` has one flaky test.** "takes in the event lines it reads"
   fails in a full run and passes alone; it is unchanged since the upstream commit.
   Treat it as known, not as a regression.
