@@ -6,6 +6,7 @@
  */
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { key } from '../core/ids.ts'
 import type { OutboundMessage, Ticket } from '../core/index.ts'
@@ -253,6 +254,47 @@ export function hostRunEnvironment(commands: Commands): RunEnvironment {
   }
 }
 
+/** How long the runner may take to report its durable session identity; its kernel is set up first. */
+const IDENTITY_TIMEOUT_MS = 600_000
+
+/**
+ * The model configuration the run uses inside the confinement.
+ *
+ * The runner reads its providers from its own home, and the confinement masks the operator's home. Without a
+ * configuration of its own the runner falls back to the model definition it ships with, which names another
+ * endpoint for the provider, and the model call fails. The controller therefore writes the approved provider and
+ * model into the run's own home, with the credential named by its environment variable and never by its value.
+ */
+export function writeRunnerModel(storage: string, manifest: ApprovedManifest): string | undefined {
+  const source = process.env.DSH_PRIME_MODELS_FILE ?? ''
+  if (!source) return undefined
+  const path = source.startsWith('~') ? join(homedir(), source.slice(1)) : source
+  let config: { providers?: Record<string, { models?: unknown[]; apiKey?: string }> }
+  try {
+    config = JSON.parse(readFileSync(path, 'utf8')) as typeof config
+  } catch {
+    return undefined
+  }
+  const provider = config.providers?.[manifest.environment.model.provider]
+  if (!provider) return undefined
+  const models = (provider.models ?? []).filter(model => (model as { id?: string }).id === manifest.environment.model.id)
+  if (!models.length) return undefined
+  const credential = process.env.DSH_PRIME_CREDENTIAL_ENV ?? ''
+  const target = join(storage, '.prime', 'agent')
+  mkdirSync(target, { recursive: true })
+  const file = join(target, 'models.json')
+  writeFileSync(file, JSON.stringify({
+    providers: {
+      [manifest.environment.model.provider]: {
+        ...provider,
+        apiKey: credential || provider.apiKey,
+        models,
+      },
+    },
+  }, null, 2))
+  return file
+}
+
 /**
  * The commands the runner's own tooling needs inside the confinement.
  *
@@ -302,9 +344,11 @@ export function runnerAdapter(supervisor: PrimeSupervisor, deps: PrimeServiceDep
         argv: invocation.argv,
         segmentId: segment.segmentId,
         storage: segment.runner.workspace,
-        env: runCredential(),
+        env: { ...runCredential(), IDENTITY_TIMEOUT_MS: String(IDENTITY_TIMEOUT_MS) },
         tools: runnerTools(),
       })
+      // The runner reads its model configuration from its own home, which is the run's storage inside the confinement.
+      writeRunnerModel(plan.storage, manifest)
       const result = await supervisor.launch(plan, segment.runner)
       // The barrier is released only after the run's identities are known, so the runner cannot begin work
       // before the controller can reconcile it.

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { buildLaunchInvocation, segmentGoal, segmentPrompt, DEFAULT_LIMITS } from '../src/executor/prime-launch.ts'
-import { runCredential } from '../src/app/prime-service.ts'
+import { runCredential, writeRunnerModel } from '../src/app/prime-service.ts'
 import type { ApprovedManifest } from '../src/executor/prime-model.ts'
 
 const manifest = {
@@ -83,6 +86,40 @@ describe('the bounded autonomous invocation', () => {
     expect(prompt).toContain('files')
     expect(prompt).toContain('sha256sum')
     expect(prompt).toContain('/tmp/runner-report.json')
+  })
+
+  it('writes the approved model into the run\'s own home, with the credential named and never valued', () => {
+    const models = mkdtempSync(join(tmpdir(), 'prime-models-'))
+    writeFileSync(join(models, 'models.json'), JSON.stringify({
+      providers: {
+        minimax: {
+          baseUrl: 'https://api.minimax.io/v1',
+          api: 'openai-completions',
+          apiKey: 'a-secret-value',
+          models: [{ id: 'MiniMax-M3.1-Flash', name: 'MiniMax' }, { id: 'other', name: 'Other' }],
+        },
+      },
+    }))
+    const storage = mkdtempSync(join(tmpdir(), 'prime-storage-'))
+    const previous = process.env.DSH_PRIME_MODELS_FILE
+    const credential = process.env.DSH_PRIME_CREDENTIAL_ENV
+    process.env.DSH_PRIME_MODELS_FILE = join(models, 'models.json')
+    process.env.DSH_PRIME_CREDENTIAL_ENV = 'MINIMAX_API_KEY'
+    try {
+      const file = writeRunnerModel(storage, manifest)
+      expect(file).toBe(join(storage, '.prime', 'agent', 'models.json'))
+      const written = JSON.parse(readFileSync(file!, 'utf8'))
+      expect(written.providers.minimax.baseUrl).toBe('https://api.minimax.io/v1')
+      expect(written.providers.minimax.api).toBe('openai-completions')
+      expect(written.providers.minimax.apiKey).toBe('MINIMAX_API_KEY')
+      expect(written.providers.minimax.models.map((model: { id: string }) => model.id)).toEqual(['MiniMax-M3.1-Flash'])
+      expect(readFileSync(file!, 'utf8')).not.toContain('a-secret-value')
+    } finally {
+      if (previous === undefined) delete process.env.DSH_PRIME_MODELS_FILE
+      else process.env.DSH_PRIME_MODELS_FILE = previous
+      if (credential === undefined) delete process.env.DSH_PRIME_CREDENTIAL_ENV
+      else process.env.DSH_PRIME_CREDENTIAL_ENV = credential
+    }
   })
 
   it('bounds the goal to the approved task range and the human gate', () => {
