@@ -60,6 +60,9 @@ import { allowlistOf, createPrimeBridge, deliveryAdapter, hostPreflightHost, hos
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
 const now = (): string => new Date().toISOString()
 
+/** How often the bridge reconciles the runs it holds; the signal of a runner is only a hint. */
+const RECONCILIATION_INTERVAL_MS = 30_000
+
 /**
  * Composition root of dsh-superagent that connects `Store`, `Setup`, `Engine`, `SourceRegistry`, `Effects`, `Outbox`, `Passes`, `Sessions`, `Settings`, `Prompts`, `DshExecutor`, and `MasterAssessor`.
  * Exposes the `SourceHost` service on the Cordis context for source plugins and coordinates startup, setup checks, HTTP route registration, and graceful shutdown.
@@ -92,6 +95,8 @@ export class Runtime extends Service implements SourceHost {
   private readonly disposers: (() => void)[] = []
   private releaseLock?: () => Promise<void>
   private closingFlag = false
+  /** The timer that reconciles the runs of the bridge, so a finished run is noticed without a restart. */
+  private reconciliation?: NodeJS.Timeout
   private stopping?: Promise<void>
   private readonly sourceDeps: SourceContextDeps
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
@@ -309,6 +314,10 @@ export class Runtime extends Service implements SourceHost {
     this.bridge?.install()
     // The bridge reconciles the segments it finds before any launch effect may dispatch.
     this.bridge?.reconcileOpenSegments()
+    // A run that ends is noticed by a low-frequency reconciliation: the runner's own signal is only a hint, and the
+    // startup reconciliation alone would leave a finished run waiting for the next restart.
+    this.reconciliation = setInterval(() => this.bridge?.reconcileOpenSegments(), RECONCILIATION_INTERVAL_MS)
+    this.reconciliation.unref()
     this.runtimeHealth.set({ state: 'ready', detail: 'Orchestrator is ready', at: now() })
   }
   private httpHost(): HttpHost {
@@ -323,7 +332,8 @@ export class Runtime extends Service implements SourceHost {
   /** Idempotent stop; concurrent or repeated calls share the same shutdown promise. */
   stop(): Promise<void> { return this.stopping ??= this.shutdown() }
   private async shutdown(): Promise<void> {
-    this.closingFlag = true; const passes = this.passes.stop(); this.stopped.abort()
+    this.closingFlag = true; if (this.reconciliation) { clearInterval(this.reconciliation); this.reconciliation = undefined }
+    const passes = this.passes.stop(); this.stopped.abort()
     try {
       this.assessor.stop()
       const ids = [this.masterId, ...this.store.tickets.list().map(ticket => workerSessionId(ticket.id))]
