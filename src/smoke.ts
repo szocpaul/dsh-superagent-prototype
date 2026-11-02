@@ -9,7 +9,7 @@
 export const SMOKE_VERSION = 1
 
 /** The string the fixture is named after and returns. */
-const SMOKE_STRING = 'smoke'
+export const SMOKE_STRING = 'smoke'
 
 /** Returns the smoke string the fixture is named after. */
 export function smoke(): string {

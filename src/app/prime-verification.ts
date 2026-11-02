@@ -67,10 +67,12 @@ export function revisionPort(commands: Commands, root: string): RevisionPort {
  * The check runs in a separate checkout of the revision, so it cannot see the runner's working tree, and it
  * holds no credential: the environment names none, and the git configuration of the checkout has no helper.
  */
-export function verifierPort(commands: Commands, root: string): VerifierPort {
+export function verifierPort(commands: Commands, root: string, storage = tmpdir()): VerifierPort {
   return {
     async run(check: ApprovedCheck, revision: string, environment) {
-      const scratch = mkdtempSync(join(tmpdir(), 'prime-verify-'))
+      // The scratch copy lives in the run's own storage: the temporary directory of the host is small, and the
+      // dependencies of the project do not fit into it.
+      const scratch = mkdtempSync(join(storage, 'prime-verify-'))
       try {
         const git = async (args: string[], cwd = scratch) => (await commands.git(args, cwd)).trim()
         await git(['init', '--quiet'], scratch)
