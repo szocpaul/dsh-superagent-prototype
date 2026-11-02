@@ -52,6 +52,17 @@ describe('the approval of a run', () => {
     expect(host.store.bridge.segments.byTicket('ticket-1')).toHaveLength(1)
   })
 
+  it('reserves a new run after the previous segment of the ticket was stopped', async () => {
+    host = harness({ runApproval: () => decision('approved') })
+    // The first run of the ticket ended with a stopped segment, which released the runner slot.
+    host.store.bridge.reserve({ ...{ segmentId: 'old-segment', ticketId: 'ticket-1', assignmentId: 'assignment-1', generation: 1, manifestId: '5'.repeat(64), phase: 'stopped', stopEpoch: 1, stopRequested: true, taskIds: ['T001'], nextGateId: null, runner: { serviceUnit: 'unit', cgroup: 'cgroup', tmux: 'tmux', socket: 'socket', workspace: '/tmp/workspace', branch: 'agent/ticket-1' }, quotaGuardId: 'guard-1', createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-01T00:00:00.000Z' } })
+    host.store.bridge.release('old-segment')
+    await awaitDecision()
+    const segments = host.store.bridge.segments.byTicket('ticket-1')
+    expect(segments).toHaveLength(2)
+    expect(segments[1]?.phase).not.toBe('stopped')
+  })
+
   it('reports the refusal and reserves nothing when the human denies the manifest', async () => {
     host = harness({ runApproval: () => decision('denied') })
     await awaitDecision()

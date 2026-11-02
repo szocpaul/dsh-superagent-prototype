@@ -178,7 +178,8 @@ export class PrimeBridge {
       tickets.report(ticketId, { state: 'blocked', summary: 'The approved manifest of the run is missing' })
       return true
     }
-    if (store.bridge.segments.byTicket(ticketId).some(segment => segment.phase !== 'blocked')) return true
+    // A segment that reached a terminal phase released the runner slot, so it does not keep the ticket from a new run.
+    if (store.bridge.segments.byTicket(ticketId).some(segment => !['stopped', 'ready', 'blocked', 'failed'].includes(segment.phase))) return true
     const record = await approval.findRunApproval(ticketId, manifestDigest(manifest))
     // The operator has not answered yet: the effect waits for the decision.
     if (!record) return false
