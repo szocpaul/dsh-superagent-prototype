@@ -5,10 +5,13 @@
  * verification and the delivery - and produces nothing useful.
  */
 
+/** The string the fixture is named after. */
+const SMOKE_NAME = 'smoke'
+
 /** The version of the disposable fixture. */
 export const SMOKE_VERSION = 1
 
 /** Returns the string the fixture is named after. */
 export function smoke(): string {
-  return 'smoke'
+  return SMOKE_NAME
 }
