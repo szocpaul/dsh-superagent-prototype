@@ -215,3 +215,20 @@ describe('the gate record', () => {
     expect(() => gateWait(other, evidence, { delivered: true })).toThrow(GateError)
   })
 })
+
+describe('the revision a gate commit must sit on', () => {
+  it('is the revision the controller published for the run, not the revision from before it', async () => {
+    const host = harness()
+    const segment = reserve(host)
+    host.store.bridge.segments.save({ ...segment, phase: 'gate_wait', nextGateId: 'T001' })
+    host.store.bridge.reports.save(segment.segmentId, {
+      schemaVersion: 1,
+      runner: { ...runnerReport(), segmentId: segment.segmentId },
+      verification: { ...verification(), resultRevision: 'f'.repeat(40) },
+    })
+    await host.bridge.awaitGate(segment.segmentId)
+    expect(host.calls.gateParent).toBe('f'.repeat(40))
+    host.dispose()
+  })
+})
+import { harness, reserve, runnerReport, verification } from './fixtures/prime-bridge-host.ts'

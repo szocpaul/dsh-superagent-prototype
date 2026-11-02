@@ -221,9 +221,12 @@ export class PrimeBridge {
       tickets.report(segment.ticketId, { state: 'blocked', summary: `The gate ${segment.nextGateId} is not an approved task` })
       return true
     }
+    // The gate commit sits on the branch of the run, so its parent is the revision the controller published for that
+    // run; the segment's own baseline is the revision from before the run and is never the parent of a gate commit.
+    const published = this.host.store.bridge.reports.get(segmentId)?.verification?.resultRevision
     const record = await this.host.approval.findGateApproval(segment.ticketId, segment.nextGateId, manifestDigest(manifest), {
       taskLine: `${gate.id} ${gate.text}`,
-      parent: segment.baseRevision ?? '',
+      parent: published ?? segment.baseRevision ?? '',
     })
     // The operator has not decided the gate yet: the effect waits for the decision.
     if (!record) return false

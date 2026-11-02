@@ -257,6 +257,11 @@ GIT_CONFIG_GLOBAL="$HOME/.config/gh-agent/gitconfig" GIT_CONFIG_NOSYSTEM=1 git p
   unknown remote outcome. The merge guard is proven from what the controller's own
   identity may do: the target branch carries a protection rule, and the
   controller can neither administer nor maintain the repository.
+- **A gate commit's parent is the revision the controller published.** The segment's
+  own baseline is the revision from before the run, and a gate commit sits on the
+  branch of the run, so its parent is the published result revision. The segment
+  never carried a baseline revision at all, so the gate expected the parent of a
+  gate commit to be the empty string, and no commit could ever satisfy it.
 - **The Feishu consumer's health had one race.** The consumer's ready report and
   the error a malformed event reports arrive on two streams in either order, and the
   ready report could erase the error. The consumer keeps the error now, and

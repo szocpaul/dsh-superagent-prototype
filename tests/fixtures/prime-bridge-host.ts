@@ -65,13 +65,14 @@ export interface Recorder {
   quotaRelease: number
   verify: number
   deliver: number
+  gateParent: string
   notifications: string[]
   reports: { state: string; summary: string; question?: string }[]
 }
 
 /** A fresh recorder. */
 export const recorder = (): Recorder => ({
-  launch: 0, stop: 0, cleanup: 0, quotaInstall: 0, quotaRelease: 0, verify: 0, deliver: 0, notifications: [], reports: [],
+  launch: 0, stop: 0, cleanup: 0, quotaInstall: 0, quotaRelease: 0, verify: 0, deliver: 0, gateParent: '', notifications: [], reports: [],
 })
 
 /** The fake host of one test. */
@@ -122,7 +123,10 @@ export const harness = (options: HarnessOptions = {}): Harness => {
       revalidate: async () => { await options.revalidate?.(state.harness) },
       gateDecision: async () => undefined,
       findRunApproval: async () => options.runApproval?.(),
-      findGateApproval: async () => undefined,
+      findGateApproval: async (_ticketId: string, _gateId: string, _digest: string, gate: { parent: string }) => {
+        calls.gateParent = gate.parent
+        return undefined
+      },
     },
     preflight: { run: async () => ({ ok: true, failures: [] }) },
     runner: {
